@@ -1,6 +1,7 @@
 import os
 import logging
 import time
+import asyncio
 from logging.handlers import TimedRotatingFileHandler
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
@@ -78,19 +79,35 @@ for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
 logger = logging.getLogger("app.main")
 
 
+async def image_cache_cleanup_loop():
+    logger.info("Starting image cache cleanup loop...")
+    while True:
+        try:
+            cfg = await load_config()
+            if cfg:
+                await db_manager.delete_expired_cached_images(cfg.image_cache_hours)
+        except Exception as e:
+            logger.error(f"Error in image cache cleanup loop: {e}")
+        await asyncio.sleep(3600)  # Run once every hour
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         await db_manager.connect()
         await db_manager.initialize_schema()
+        
+        # Start periodic image cache cleanup task
+        asyncio.create_task(image_cache_cleanup_loop())
+        
         cfg = await load_config()
         if cfg:
             if cfg.job.enabled:
                 logging.info("LPR enabled in config, starting LPR monitor...")
-                await lpr_monitor.start(cfg)
+                asyncio.create_task(lpr_monitor.start(cfg))
             if cfg.fr.enabled:
                 logging.info("FR enabled in config, starting FR monitor...")
-                await fr_monitor.start(cfg)
+                asyncio.create_task(fr_monitor.start(cfg))
             if not cfg.job.enabled and not cfg.fr.enabled:
                 logging.info("Config found but both monitors are disabled.")
         else:

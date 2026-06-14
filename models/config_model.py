@@ -10,14 +10,18 @@ class JobConfig(BaseModel):
     page_size: int = Field(100, ge=1)
     lookback_hours: int = Field(24, ge=1)
     threshold: int = Field(10, ge=1)
+    camera_ids: list[int] = Field(default_factory=list)
 
 class FRConfig(BaseModel):
     enabled: bool = False
     poll_interval_seconds: int = Field(30, ge=5)
     lookback_hours: int = Field(24, ge=1)
     threshold: int = Field(3, ge=1)
+    camera_ids: list[int] = Field(default_factory=list)
 
 class AppConfig(BaseModel):
     vaidio: VaidioConfig
     job: JobConfig
     fr: FRConfig
+    image_cache_hours: int = Field(72, ge=0)
+

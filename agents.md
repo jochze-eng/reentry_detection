@@ -43,7 +43,7 @@ static/
 
 ### Startup
 
-`main.py` uses an async lifespan context manager. On startup, it reads `config.json` and conditionally starts `LPRMonitor` and/or `FRMonitor` depending on whether each is enabled. On shutdown, both monitors are stopped gracefully.
+`main.py` uses an async lifespan context manager. On startup, it reads the configuration from the database and conditionally launches `LPRMonitor` and/or `FRMonitor` as background tasks (`asyncio.create_task`) depending on whether each is enabled. This ensures that the web application starts up instantly and passes Docker healthchecks without being blocked by long-running monitor initialization loops that query external NVR endpoints. On shutdown, both monitors are stopped gracefully.
 
 ### Cursor-Based Polling Loop (shared by both monitors)
 
@@ -96,6 +96,7 @@ State is visible in the web UI status badge (with animated pulse during active s
 | `GET` | `/api/config` | Returns current config (API key masked to first 6 chars) |
 | `POST` | `/api/config` | Saves config and restarts monitors |
 | `POST` | `/api/config/test` | Tests connectivity to the Vaidio server |
+| `GET` | `/api/cameras/by-engine` | Returns available cameras grouped by enabled engine (LPR/FR) |
 | `GET` | `/api/monitor/status` | LPR monitor status snapshot (includes `unique_lpr_count` in stats) |
 | `GET` | `/api/monitor/logs` | Recent LPR log entries (default 50, max 200) |
 | `GET` | `/api/fr/status` | FR monitor status snapshot (includes `unique_fr_count` in stats) |
@@ -130,10 +131,13 @@ Stores the global app configuration (exactly 1 row).
 *   `lpr_page_size` (integer)
 *   `lpr_lookback_hours` (integer)
 *   `lpr_threshold` (integer)
+*   `lpr_camera_ids` (text) — comma-separated string of selected camera IDs
 *   `fr_enabled` (boolean)
 *   `fr_poll_interval` (integer)
 *   `fr_lookback_hours` (integer)
 *   `fr_threshold` (integer)
+*   `fr_camera_ids` (text) — comma-separated string of selected camera IDs
+*   `image_cache_hours` (integer) — duration in hours to cache proxy images (default: 72 hours, 0 to disable)
 
 #### 2. `lpr_logs` Table
 Persists processed License Plate Recognition detection events.
@@ -167,6 +171,22 @@ Persists processed Face Recognition detection events.
 *   `position` (text, default '0,0,0,0') — face bounding box coordinates
 *   `confidence` (double precision, default 0.0) — match confidence score
 
+#### 4. `cameras` Table
+Caches the list of available NVR cameras to support fast settings page loading and camera status checks.
+*   `camera_id` (integer, Primary Key)
+*   `name` (text)
+*   `is_activate` (boolean) — true if camera is activated, false if deactivated
+*   `plugins` (text, nullable) — comma-separated string of active plugins on this camera
+*   `engine_models` (text, nullable) — comma-separated string of running engines on this camera
+*   `updated_at` (timestamp with time zone) — last cache update timestamp
+
+#### 5. `image_cache` Table
+Persists proxied images to avoid slow rendering times in the web UI.
+*   `url` (text, Primary Key) — image source URL
+*   `content` (bytea) — raw image binary data
+*   `content_type` (text) — MIME type (e.g. `image/jpeg`)
+*   `created_at` (timestamp with time zone) — creation timestamp used for automatic daily/hourly cleanup
+
 ---
 
 ## Direct Vaidio NVR Search & Image Optimization
@@ -174,6 +194,8 @@ Persists processed Face Recognition detection events.
 To guarantee backward compatibility with legacy database records and optimize network load times:
 1. **Target History Routing**: Rather than relying solely on local database logs (which do not group unknown stranger faces dynamically or capture historical events occurred during offline periods), both LPR and FR history views query the Vaidio NVR search APIs directly (`/ainvr/api/lpr/plates` and `/ainvr/api/face/search` via face descriptors) to retrieve fresh occurrence lists, coordinates, and images.
 2. **Lightweight Thumbnails**: Frontend grids on the detail expansion pages load small `_thumbnail.jpg` scene images (10-30KB) instead of high-res scene snapshots (300KB - 1MB+), preventing connection queuing and ensuring fast rendering. Full-res snapshots are fetched on-demand inside the magnifying glass zoom modal.
+3. **Database Caching of Camera List & Status**: To guarantee sub-10ms settings page load times, the list of cameras (with their corresponding `"Activate"` / `"Deactivate"` status) is cached in the local PostgreSQL database. If the cache is stale (older than 5 minutes), a FastAPI background task asynchronously updates it from the Vaidio NVR without blocking the UI request.
+4. **Database Image Proxy Caching**: To accelerate face target details, license plate cards, and image grid loading times, requests to the `/api/image` endpoint are intercepted and cached in the local PostgreSQL database for a configurable retention window (default 72 hours). Setting this window to 0 disables the cache and purges all records.
 
 ---
 
@@ -225,3 +247,11 @@ The service is currently running in a Docker container on the remote test machin
 - **Scene Image Suffix Derivation**: Resolves the original scene snapshot URL directly from face crop URLs without extra NVR queries (substituting `_crop.jpg` or `_face*.jpg` naming conventions).
 - **Dynamic Bounding Box & Magnifier**: Bounding boxes scale reactively based on natural-to-client dimension ratios, coupled with a hover-based magnifying zoom lens.
 - **Async throughout**: All I/O (HTTP, file ops) uses `asyncio` / `httpx` / `aiofiles` — no blocking calls.
+- **OnError Infinite Loop Fixed**: Resolved a critical bug where failed image loads recursively triggered the `onerror` handler by setting `this.src` to the stylesheet `/static/style.css`. Failed loads now cleanly hide images via `display='none'` and terminate the handler.
+- **Remote Machine Deployment**: The image caching system and the `onerror` loop fix have been fully deployed and verified on the remote Ubuntu test PC (`100.101.159.22`) using rsync and container rebuilds.
+- **FR Detail View — Time-Anchored History**: When expanding an FR log row, the `detected_at` timestamp from the clicked row is passed to `/api/fr/target/history`. The Vaidio face search window is `detected_at - lookback_hours → detected_at` (converted to local SGT time), exactly replicating the monitor's evaluation window so `history_count` matches the number of results shown.
+- **FR Detail View — Flat Search API Parsing**: The Vaidio `/ainvr/api/face/search` endpoint returns a flat structure (`faceKeyId`, `cameraId`, `file`, `position`, `confidence` directly on each item), unlike the match-polling API which uses nested `faceKey`/`faceTarget` objects. `search_face_history()` was fixed to read the correct flat fields.
+- **FR Detail View — Stranger DB Fallback**: When Vaidio's similarity search returns empty for a stranger detection (no similar faces in the window), the route falls back to `get_fr_logs_by_face_file(face_file)` to return the specific DB record so the detail page always shows at least the clicked detection.
+- **FR Detail View — Auto-Refresh Guard**: `updateFRLogs()` in `fr.html` now has a `if (currentView === 'details') return;` guard to prevent the 3-second polling loop from overwriting the detail view.
+- **sceneThumbnail Derivation**: `search_face_history()` now derives `sceneThumbnail` from the face crop URL using `re.sub(r'_face(?:\d+|_\d+_crop)\.jpg$', '_thumbnail.jpg', face_file)`.
+- **FR Detail View Deployment**: All FR Monitor detail page fixes deployed and verified on remote Ubuntu test PC (`100.101.159.22`) using rsync and container rebuilds.

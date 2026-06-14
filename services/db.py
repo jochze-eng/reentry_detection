@@ -130,6 +130,42 @@ class DatabaseManager:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_target ON fr_logs (face_target_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_detected ON fr_logs (detected_at DESC)")
 
+            # Add camera selection columns to config table if they don't exist yet
+            await conn.execute("""
+                ALTER TABLE config ADD COLUMN IF NOT EXISTS lpr_camera_ids TEXT DEFAULT ''
+            """)
+            await conn.execute("""
+                ALTER TABLE config ADD COLUMN IF NOT EXISTS fr_camera_ids TEXT DEFAULT ''
+            """)
+
+            # 4. Cameras cache table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS cameras (
+                    camera_id INTEGER PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    is_activate BOOLEAN NOT NULL,
+                    plugins TEXT,
+                    engine_models TEXT,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # 5. Image Cache table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS image_cache (
+                    url TEXT PRIMARY KEY,
+                    content BYTEA NOT NULL,
+                    content_type TEXT NOT NULL,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_image_cache_created_at ON image_cache (created_at)")
+
+            # Add image_cache_hours column to config table if it doesn't exist yet
+            await conn.execute("""
+                ALTER TABLE config ADD COLUMN IF NOT EXISTS image_cache_hours INTEGER DEFAULT 72 NOT NULL
+            """)
+
             logger.info("Database schemas verified/initialized successfully.")
 
     # ── Configuration Persistence ──
@@ -143,11 +179,18 @@ class DatabaseManager:
                 # Initialize default config row if empty
                 default_cfg = AppConfig(
                     vaidio=VaidioConfig(base_url="https://localhost", api_key="placeholder_key_change_me"),
-                    job=JobConfig(enabled=False, poll_interval_seconds=30, page_size=100, lookback_hours=24, threshold=10),
-                    fr=FRConfig(enabled=False, poll_interval_seconds=30, lookback_hours=24, threshold=3)
+                    job=JobConfig(enabled=False, poll_interval_seconds=30, page_size=100, lookback_hours=24, threshold=10, camera_ids=[]),
+                    fr=FRConfig(enabled=False, poll_interval_seconds=30, lookback_hours=24, threshold=3, camera_ids=[]),
+                    image_cache_hours=72
                 )
                 await self.save_config(default_cfg)
                 return default_cfg
+            
+            lpr_cam_str = row["lpr_camera_ids"] if "lpr_camera_ids" in row else ""
+            lpr_camera_ids = [int(x) for x in lpr_cam_str.split(",") if x.strip()]
+            
+            fr_cam_str = row["fr_camera_ids"] if "fr_camera_ids" in row else ""
+            fr_camera_ids = [int(x) for x in fr_cam_str.split(",") if x.strip()]
             
             return AppConfig(
                 vaidio=VaidioConfig(
@@ -159,27 +202,34 @@ class DatabaseManager:
                     poll_interval_seconds=row["lpr_poll_interval"],
                     page_size=row["lpr_page_size"],
                     lookback_hours=row["lpr_lookback_hours"],
-                    threshold=row["lpr_threshold"]
+                    threshold=row["lpr_threshold"],
+                    camera_ids=lpr_camera_ids
                 ),
                 fr=FRConfig(
                     enabled=row["fr_enabled"],
                     poll_interval_seconds=row["fr_poll_interval"],
                     lookback_hours=row["fr_lookback_hours"],
-                    threshold=row["fr_threshold"]
-                )
+                    threshold=row["fr_threshold"],
+                    camera_ids=fr_camera_ids
+                ),
+                image_cache_hours=row["image_cache_hours"] if "image_cache_hours" in row else 72
             )
 
     async def save_config(self, cfg: AppConfig):
         if not self.pool:
             await self.connect()
 
+        lpr_cam_str = ",".join(map(str, cfg.job.camera_ids))
+        fr_cam_str = ",".join(map(str, cfg.fr.camera_ids))
+
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 INSERT INTO config (
                     id, vaidio_base_url, vaidio_api_key,
                     lpr_enabled, lpr_poll_interval, lpr_page_size, lpr_lookback_hours, lpr_threshold,
-                    fr_enabled, fr_poll_interval, fr_lookback_hours, fr_threshold
-                ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    fr_enabled, fr_poll_interval, fr_lookback_hours, fr_threshold,
+                    lpr_camera_ids, fr_camera_ids, image_cache_hours
+                ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 ON CONFLICT (id) DO UPDATE SET
                     vaidio_base_url = EXCLUDED.vaidio_base_url,
                     vaidio_api_key = EXCLUDED.vaidio_api_key,
@@ -191,7 +241,10 @@ class DatabaseManager:
                     fr_enabled = EXCLUDED.fr_enabled,
                     fr_poll_interval = EXCLUDED.fr_poll_interval,
                     fr_lookback_hours = EXCLUDED.fr_lookback_hours,
-                    fr_threshold = EXCLUDED.fr_threshold
+                    fr_threshold = EXCLUDED.fr_threshold,
+                    lpr_camera_ids = EXCLUDED.lpr_camera_ids,
+                    fr_camera_ids = EXCLUDED.fr_camera_ids,
+                    image_cache_hours = EXCLUDED.image_cache_hours
             """,
             cfg.vaidio.base_url,
             cfg.vaidio.api_key,
@@ -203,7 +256,10 @@ class DatabaseManager:
             cfg.fr.enabled,
             cfg.fr.poll_interval_seconds,
             cfg.fr.lookback_hours,
-            cfg.fr.threshold
+            cfg.fr.threshold,
+            lpr_cam_str,
+            fr_cam_str,
+            cfg.image_cache_hours
             )
             logger.info("Configuration saved to database.")
 
@@ -401,6 +457,39 @@ class DatabaseManager:
                 records.append(d)
             return records
 
+    async def get_fr_logs_by_face_file(self, face_file: str) -> list[dict]:
+        """Return the specific DB log entry matching a face_file URL.
+        Used when Vaidio similarity search returns empty for a stranger — ensures
+        clicking a 1-hit row always shows at least that 1 detection record.
+        """
+        if not self.pool:
+            await self.connect()
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT face_match_id, face_target_id, face_target_name, face_file, detected_at, camera_id,
+                       history_count, triggered, event_created, error_msg as error,
+                       COALESCE(position, '0,0,0,0') as position,
+                       COALESCE(confidence, 0.0) as confidence
+                FROM fr_logs
+                WHERE face_file = $1
+                ORDER BY detected_at DESC
+            """, face_file)
+
+            records = []
+            for row in rows:
+                d = dict(row)
+                if isinstance(d["detected_at"], datetime):
+                    d["detected_at"] = d["detected_at"].isoformat()
+                d["faceMatchId"] = d.pop("face_match_id")
+                d["faceTargetId"] = d.pop("face_target_id")
+                d["faceTargetName"] = d.pop("face_target_name")
+                d["file"] = d.pop("face_file")
+                d["datetime"] = d.pop("detected_at")
+                d["cameraId"] = d.pop("camera_id")
+                records.append(d)
+            return records
+
     async def get_unique_fr_count(self, lookback_hours: int) -> int:
         if not self.pool:
             await self.connect()
@@ -412,6 +501,97 @@ class DatabaseManager:
                 WHERE detected_at >= NOW() - ($1 * INTERVAL '1 hour')
             """, lookback_hours)
             return row["count"] if row else 0
+
+    async def upsert_cameras(self, cameras: list[dict]):
+        if not self.pool:
+            await self.connect()
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for cam in cameras:
+                    plugins = cam.get("plugins")
+                    if isinstance(plugins, list):
+                        plugins_str = ",".join(plugins)
+                    else:
+                        plugins_str = plugins or ""
+
+                    engine_models = cam.get("engineModels") or cam.get("engine_models")
+                    if isinstance(engine_models, list):
+                        engine_models_str = ",".join(engine_models)
+                    else:
+                        engine_models_str = engine_models or ""
+
+                    await conn.execute("""
+                        INSERT INTO cameras (camera_id, name, is_activate, plugins, engine_models, updated_at)
+                        VALUES ($1, $2, $3, $4, $5, NOW())
+                        ON CONFLICT (camera_id) DO UPDATE SET
+                            name = EXCLUDED.name,
+                            is_activate = EXCLUDED.is_activate,
+                            plugins = EXCLUDED.plugins,
+                            engine_models = EXCLUDED.engine_models,
+                            updated_at = NOW()
+                    """,
+                    int(cam["cameraId"]),
+                    cam.get("name", f"Camera {cam['cameraId']}"),
+                    bool(cam.get("is_activate", False)),
+                    plugins_str,
+                    engine_models_str
+                    )
+
+    async def get_cached_cameras(self) -> list[dict]:
+        if not self.pool:
+            await self.connect()
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM cameras ORDER BY name ASC")
+            return [dict(row) for row in rows]
+
+    async def get_last_camera_sync_time(self) -> datetime | None:
+        if not self.pool:
+            await self.connect()
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT MAX(updated_at) as max_ts FROM cameras")
+            return row["max_ts"] if row else None
+
+    async def get_cached_image(self, url: str) -> dict | None:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT content, content_type FROM image_cache WHERE url = $1
+            """, url)
+            if row:
+                return {"content": row["content"], "content_type": row["content_type"]}
+            return None
+
+    async def insert_cached_image(self, url: str, content: bytes, content_type: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO image_cache (url, content, content_type, created_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (url) DO UPDATE SET
+                    content = EXCLUDED.content,
+                    content_type = EXCLUDED.content_type,
+                    created_at = NOW()
+            """, url, content, content_type)
+
+    async def delete_expired_cached_images(self, lookback_hours: int):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            if lookback_hours <= 0:
+                await conn.execute("TRUNCATE TABLE image_cache")
+                logger.info("Cleared all cached images (caching disabled).")
+            else:
+                res = await conn.execute("""
+                    DELETE FROM image_cache
+                    WHERE created_at < NOW() - ($1 * INTERVAL '1 hour')
+                """, lookback_hours)
+                logger.info(f"Deleted expired cached images: {res}")
+
 
 
 # Singleton Database Manager Instance

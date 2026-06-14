@@ -74,10 +74,6 @@
               <div class="stat-label">Unique LPR</div>
             </div>
             <div class="stat-box">
-              <div class="stat-num" id="lpr-stat-processed">0</div>
-              <div class="stat-label">Processed</div>
-            </div>
-            <div class="stat-box">
               <div class="stat-num" id="lpr-stat-triggered">0</div>
               <div class="stat-label">Triggered</div>
             </div>
@@ -296,11 +292,9 @@
 
         const stats = s.stats || {};
         const uniqueEl = document.getElementById(`lpr-stat-unique`);
-        const processedEl = document.getElementById(`lpr-stat-processed`);
         const triggeredEl = document.getElementById(`lpr-stat-triggered`);
         
         if (uniqueEl) uniqueEl.textContent = stats.unique_lpr_count ?? 0;
-        if (processedEl) processedEl.textContent = stats.total_processed ?? 0;
         if (triggeredEl) triggeredEl.textContent = stats.total_triggered ?? 0;
       }
     }
@@ -483,20 +477,20 @@
 
       grid.innerHTML = sorted.map((item, idx) => {
         const sceneUrl = item.sceneThumbnail || '';
-        const proxiedScene = sceneUrl ? `/api/image?url=${encodeURIComponent(sceneUrl)}` : '/static/style.css';
-        const proxiedPlate = item.file ? `/api/image?url=${encodeURIComponent(item.file)}` : '/static/style.css';
+        const proxiedScene = sceneUrl ? `/api/image?url=${encodeURIComponent(sceneUrl)}` : '';
+        const proxiedPlate = item.file ? `/api/image?url=${encodeURIComponent(item.file)}` : '';
         const confPct = Math.round(item.confidence * 100);
         const cam = camName(item.cameraId);
 
         return `
           <div class="detection-card" onclick="showDetailModal(${idx})">
             <div class="detection-img-side">
-              <img class="detection-scene-img" src="${proxiedScene}" onerror="this.src='/static/style.css'">
+              <img class="detection-scene-img" src="${proxiedScene}" onerror="this.onerror=null; this.style.display='none';">
               <span class="detection-confidence-tag">${confPct}%</span>
             </div>
             <div class="detection-face-side">
               <div class="plate-avatar-wrap" style="width: 100px; height: 35px; box-shadow: none;">
-                <img class="plate-avatar" src="${proxiedPlate}" onerror="this.src='/static/style.css'">
+                <img class="plate-avatar" src="${proxiedPlate}" onerror="this.onerror=null; this.style.display='none';">
               </div>
               <div class="detection-meta">
                 <span class="detection-time">${fmtTime(item.datetime)}</span>

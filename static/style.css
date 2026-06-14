@@ -277,7 +277,7 @@ body {
 /* ── Stats ── */
 .stats-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -1196,4 +1196,87 @@ tbody tr.clickable-row:active {
   background: #121420;
   border-radius: 4px;
   border: 1px solid var(--bg-sidebar);
+}
+
+/* ── Camera Selection Layout ── */
+.camera-selection-container {
+  margin-top: 16px;
+  border-top: 1px solid var(--border-color);
+  padding-top: 16px;
+}
+
+.camera-list {
+  max-height: 150px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  padding: 8px 12px;
+  margin-top: 8px;
+}
+
+.camera-list::-webkit-scrollbar {
+  width: 6px;
+}
+.camera-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+.camera-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+}
+.camera-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.camera-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s ease;
+}
+
+.camera-item input[type="checkbox"] {
+  accent-color: var(--accent-primary);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.camera-item:hover {
+  color: var(--text-primary);
+}
+
+.camera-empty-state {
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 16px 0;
+}
+
+.camera-status-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  user-select: none;
+  border: 1px solid transparent;
+}
+
+.status-active {
+  background: rgba(0, 184, 148, 0.12);
+  color: #00b894;
+  border-color: rgba(0, 184, 148, 0.25);
+}
+
+.status-inactive {
+  background: rgba(225, 112, 85, 0.12);
+  color: #e17055;
+  border-color: rgba(225, 112, 85, 0.25);
 }

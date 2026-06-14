@@ -74,10 +74,6 @@
               <div class="stat-label">Unique Face</div>
             </div>
             <div class="stat-box">
-              <div class="stat-num" id="fr-stat-processed">0</div>
-              <div class="stat-label">Processed</div>
-            </div>
-            <div class="stat-box">
               <div class="stat-num" id="fr-stat-triggered">0</div>
               <div class="stat-label">Triggered</div>
             </div>
@@ -132,8 +128,7 @@
               <div id="detail-profile-id" class="profile-id">ID: -</div>
               <div class="profile-tags">
                 <span id="detail-profile-type" class="tag-badge accent">-</span>
-                <span class="tag-badge">Age: -</span>
-                <span class="tag-badge">Gender: -</span>
+                <span id="detail-profile-hits" class="tag-badge">Hits: -</span>
               </div>
             </div>
           </div>
@@ -290,11 +285,9 @@
 
         const stats = s.stats || {};
         const uniqueEl = document.getElementById(`fr-stat-unique`);
-        const processedEl = document.getElementById(`fr-stat-processed`);
         const triggeredEl = document.getElementById(`fr-stat-triggered`);
         
         if (uniqueEl) uniqueEl.textContent = stats.unique_fr_count ?? 0;
-        if (processedEl) processedEl.textContent = stats.total_processed ?? 0;
         if (triggeredEl) triggeredEl.textContent = stats.total_triggered ?? 0;
       }
     }
@@ -309,6 +302,9 @@
     let imageNaturalHeight = 1080;
 
     function updateFRLogs(logs) {
+      // Do not overwrite logs table if the user is in target details view
+      if (currentView === 'details') return;
+
       const tbody = document.getElementById('fr-log-body');
       const countEl = document.getElementById('fr-log-count');
       if (countEl) countEl.textContent = logs.length ? `${logs.length} entries` : '';
@@ -327,8 +323,9 @@
         const escapedName = r.faceTargetName ? r.faceTargetName.replace(/'/g, "\\'") : 'unknown';
         const escapedId = r.faceTargetId ? r.faceTargetId.replace(/'/g, "\\'") : 'unknown';
         const escapedFile = r.face_file ? r.face_file.replace(/'/g, "\\'") : '';
+        const escapedTs = r.detected_at ? encodeURIComponent(r.detected_at) : '';
         const cam = camName(r.cameraId);
-        return `<tr class="clickable-row" onclick="openTargetDetails('${escapedFile}', '${escapedName}', '${escapedId}')">
+        return `<tr class="clickable-row" onclick="openTargetDetails('${escapedFile}', '${escapedName}', '${escapedId}', '${escapedTs}')">
           <td>${fmtTime(r.detected_at)}</td>
           <td>${img}</td>
           <td><strong>${r.faceTargetName}</strong></td>
@@ -340,7 +337,8 @@
     }
 
     // ── Target Details Expansion Page Logic ──
-    async function openTargetDetails(faceFile, faceTargetName, faceTargetId) {
+    // detectedAt is URL-encoded ISO timestamp from the clicked log row
+    async function openTargetDetails(faceFile, faceTargetName, faceTargetId, detectedAt) {
       showToast('Loading target: ' + (faceTargetName || faceTargetId), 'info');
       currentView = 'details';
       activeTarget = {
@@ -371,9 +369,11 @@
       document.getElementById('toggle-hour').classList.remove('active');
       document.getElementById('toggle-day').classList.add('active');
 
-      // Load history from DB via face_target_id & face_file
+      // Load history anchored to the clicked record's timestamp
       try {
-        const history = await get(`/fr/target/history?face_target_id=${encodeURIComponent(faceTargetId)}&face_file=${encodeURIComponent(faceFile)}`);
+        let url = `/fr/target/history?face_target_id=${encodeURIComponent(faceTargetId)}&face_file=${encodeURIComponent(faceFile)}`;
+        if (detectedAt) url += `&detected_at=${detectedAt}`;
+        const history = await get(url);
         activeTarget.history = history;
         updateDetailsUI();
       } catch (err) {
@@ -388,6 +388,7 @@
       activeTarget = null;
       document.getElementById('fr-target-details').style.display = 'none';
       document.querySelector('.dashboard-grid').style.display = '';
+      refreshStatus(); // Refresh logs immediately
     }
 
     function setChartInterval(interval) {
@@ -473,6 +474,8 @@
       if (countEl) {
         countEl.textContent = `${history.length} detection${history.length !== 1 ? 's' : ''}`;
       }
+      const hitsEl = document.getElementById('detail-profile-hits');
+      if (hitsEl) hitsEl.textContent = `Hits: ${history.length}`;
 
       renderTimelineChart();
 
@@ -486,20 +489,20 @@
       const sorted = [...history].sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
 
       grid.innerHTML = sorted.map((item, idx) => {
-        const sceneUrl = item.file.replace(/_face(?:_\d+_crop|\d+)\.jpg$/, '_thumbnail.jpg');
-        const proxiedScene = `/api/image?url=${encodeURIComponent(sceneUrl)}`;
-        const proxiedFace = `/api/image?url=${encodeURIComponent(item.file)}`;
+        const sceneUrl = item.file ? item.file.replace(/_face(?:_\d+_crop|\d+)\.jpg$/, '_thumbnail.jpg') : '';
+        const proxiedScene = sceneUrl ? `/api/image?url=${encodeURIComponent(sceneUrl)}` : '';
+        const proxiedFace = item.file ? `/api/image?url=${encodeURIComponent(item.file)}` : '';
         const confPct = Math.round(item.confidence * 100);
         const cam = camName(item.cameraId);
 
         return `
           <div class="detection-card" onclick="showDetailModal(${idx})">
             <div class="detection-img-side">
-              <img class="detection-scene-img" src="${proxiedScene}" onerror="this.src='/static/style.css'">
+              <img class="detection-scene-img" src="${proxiedScene}" onerror="this.onerror=null; this.style.display='none';">
               <span class="detection-confidence-tag">${confPct}%</span>
             </div>
             <div class="detection-face-side">
-              <img class="detection-face-thumb" src="${proxiedFace}" onerror="this.src='/static/style.css'">
+              <img class="detection-face-thumb" src="${proxiedFace}" onerror="this.onerror=null; this.style.display='none';">
               <div class="detection-meta">
                 <span class="detection-time">${fmtTime(item.datetime)}</span>
                 <span class="detection-cam" title="ID: ${item.cameraId}">${cam}</span>
@@ -526,11 +529,12 @@
       const modalSceneImg = document.getElementById('modal-scene-img');
 
       modalTime.textContent = fmtTime(item.datetime);
-      modalCam.textContent = item.cameraId;
+      modalCam.textContent = camName(item.cameraId);
       modalConf.textContent = `${Math.round(item.confidence * 100)}%`;
 
-      const sceneUrl = item.file.replace(/_crop\.jpg$/, '.jpg').replace(/_face\d+\.jpg$/, '.jpg');
-      const proxiedScene = `/api/image?url=${encodeURIComponent(sceneUrl)}`;
+      const rawFile = item.file || '';
+      const sceneUrl = rawFile ? rawFile.replace(/_crop\.jpg$/, '.jpg').replace(/_face\d+\.jpg$/, '.jpg') : '';
+      const proxiedScene = sceneUrl ? `/api/image?url=${encodeURIComponent(sceneUrl)}` : '';
       
       modalSceneImg.src = proxiedScene;
       
@@ -651,9 +655,10 @@
       lens.style.left = `${px}px`;
       lens.style.top = `${py}px`;
 
-      const sceneUrl = selectedDetection.file.replace(/_crop\.jpg$/, '.jpg').replace(/_face\d+\.jpg$/, '.jpg');
-      const proxiedScene = `/api/image?url=${encodeURIComponent(sceneUrl)}`;
-      lens.style.backgroundImage = `url('${proxiedScene}')`;
+      const rawFile2 = selectedDetection.file || '';
+      const sceneUrl2 = rawFile2 ? rawFile2.replace(/_crop\.jpg$/, '.jpg').replace(/_face\d+\.jpg$/, '.jpg') : '';
+      const proxiedScene2 = sceneUrl2 ? `/api/image?url=${encodeURIComponent(sceneUrl2)}` : '';
+      lens.style.backgroundImage = proxiedScene2 ? `url('${proxiedScene2}')` : 'none';
 
       const naturalX = (x / rect.width) * imageNaturalWidth;
       const naturalY = (y / rect.height) * imageNaturalHeight;
@@ -680,8 +685,10 @@
 
     function downloadModalImage() {
       if (!selectedDetection) return;
-      const sceneUrl = selectedDetection.file.replace(/_crop\.jpg$/, '.jpg').replace(/_face\d+\.jpg$/, '.jpg');
-      const proxiedScene = `/api/image?url=${encodeURIComponent(sceneUrl)}`;
+      const rawFile3 = selectedDetection.file || '';
+      if (!rawFile3) return;
+      const sceneUrl3 = rawFile3.replace(/_crop\.jpg$/, '.jpg').replace(/_face\d+\.jpg$/, '.jpg');
+      const proxiedScene = `/api/image?url=${encodeURIComponent(sceneUrl3)}`;
       
       const a = document.createElement('a');
       a.href = proxiedScene;

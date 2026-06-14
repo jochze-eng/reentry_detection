@@ -102,10 +102,14 @@ class VaidioClient:
         params = {
             "start": start.strftime("%Y-%m-%d %H:%M:%S"),
             "end":   end.strftime("%Y-%m-%d %H:%M:%S"),
-            "allCameras": "true",
             "page": page,
             "size": self.job.page_size,
         }
+        if self.job.camera_ids:
+            params["cameraIds"] = ",".join(map(str, self.job.camera_ids))
+        else:
+            params["allCameras"] = "true"
+
         if characters:
             params["characters"] = characters
 
@@ -229,6 +233,50 @@ class VaidioClient:
         logger.info(f"Fetched {len(result)} cameras from Vaidio")
         return result
 
+    async def get_cameras_detailed(self) -> list[dict]:
+        """Return a list of all cameras with full details (plugins, engineModels etc)."""
+        result: list[dict] = []
+        page = 0
+        while True:
+            async with self._client(timeout=15) as client:
+                r = await client.get(
+                    f"{self.base_url}/ainvr/api/cameras",
+                    headers=self.headers,
+                    params={"page": page, "size": 200},
+                )
+                r.raise_for_status()
+                data = r.json()
+            for cam in data.get("content", []):
+                result.append(cam)
+            if data.get("last", True):
+                break
+            page += 1
+        logger.info(f"Fetched {len(result)} detailed cameras from Vaidio")
+        return result
+
+    async def get_cameras_with_status(self) -> list[dict]:
+        """Fetch all cameras, querying activated and deactivated separately to determine status."""
+        result: list[dict] = []
+        for is_active in [True, False]:
+            page = 0
+            while True:
+                async with self._client(timeout=15) as client:
+                    r = await client.get(
+                        f"{self.base_url}/ainvr/api/cameras",
+                        headers=self.headers,
+                        params={"page": page, "size": 200, "isActivate": str(is_active).lower()},
+                    )
+                    r.raise_for_status()
+                    data = r.json()
+                for cam in data.get("content", []):
+                    cam["is_activate"] = is_active
+                    result.append(cam)
+                if data.get("last", True):
+                    break
+                page += 1
+        logger.info(f"Fetched {len(result)} cameras with status from Vaidio")
+        return result
+
     # ------------------------------------------------------------------ #
     #  FR: raw GET to /ainvr/api/face/matches
     #  Always includes "-" (strangers) and all known categories, scores=0
@@ -246,12 +294,15 @@ class VaidioClient:
         params = {
             "start":      start.strftime("%Y-%m-%d %H:%M:%S"),
             "end":        end.strftime("%Y-%m-%d %H:%M:%S"),
-            "allCameras": "true",
             "page":       0,
             "size":       100,
             "categories": categories_param,
             "scores":     "0",
         }
+        if self.fr.camera_ids:
+            params["cameraIds"] = ",".join(map(str, self.fr.camera_ids))
+        else:
+            params["allCameras"] = "true"
 
         records = []
         while True:
@@ -321,10 +372,13 @@ class VaidioClient:
         data = {
             "start":      start.strftime("%Y-%m-%d %H:%M:%S"),
             "end":        now.strftime("%Y-%m-%d %H:%M:%S"),
-            "allCameras": "true",
             "descriptor": descriptor,
             "scores":     "0.7",
         }
+        if self.fr.camera_ids:
+            data["cameraIds"] = ",".join(map(str, self.fr.camera_ids))
+        else:
+            data["allCameras"] = "true"
         async with self._client(timeout=30) as client:
             r = await client.post(
                 f"{self.base_url}/ainvr/api/face/search",
@@ -341,16 +395,36 @@ class VaidioClient:
     # ------------------------------------------------------------------ #
     #  FR: search face history records using descriptor
     # ------------------------------------------------------------------ #
-    async def search_face_history(self, descriptor: str) -> list[dict]:
-        now = datetime.now()
-        start = now - timedelta(hours=self.fr.lookback_hours)
+    async def search_face_history(self, descriptor: str, anchor_dt=None, lookback_hours: int = None) -> list[dict]:
+        # When anchor_dt is provided (user clicked a specific log row), the window is
+        # anchor_dt - lookback_hours → anchor_dt  — exactly the same window that was
+        # used by the monitor when it computed history_count for that detection.
+        # This means clicking a row with history_count=1 will return exactly 1 result.
+        # Falls back to now - lookback_hours → now when anchor_dt is None (monitoring path).
+        if lookback_hours is None:
+            lookback_hours = self.fr.lookback_hours
+        if anchor_dt is not None:
+            # Convert to local time (naive) — Vaidio expects local server time in query strings,
+            # matching datetime.now() used in the fallback path and in search_face_count().
+            from datetime import timezone as _tz
+            if hasattr(anchor_dt, 'tzinfo') and anchor_dt.tzinfo is not None:
+                # Convert UTC-aware → local naive (astimezone uses the OS local TZ, i.e. SGT)
+                anchor_dt = anchor_dt.astimezone().replace(tzinfo=None)
+            end = anchor_dt
+            start = anchor_dt - timedelta(hours=lookback_hours)
+        else:
+            end = datetime.now()
+            start = end - timedelta(hours=lookback_hours)
         data = {
             "start":      start.strftime("%Y-%m-%d %H:%M:%S"),
-            "end":        now.strftime("%Y-%m-%d %H:%M:%S"),
-            "allCameras": "true",
+            "end":        end.strftime("%Y-%m-%d %H:%M:%S"),
             "descriptor": descriptor,
             "scores":     "0.7",
         }
+        if self.fr.camera_ids:
+            data["cameraIds"] = ",".join(map(str, self.fr.camera_ids))
+        else:
+            data["allCameras"] = "true"
         async with self._client(timeout=30) as client:
             r = await client.post(
                 f"{self.base_url}/ainvr/api/face/search",
@@ -366,22 +440,27 @@ class VaidioClient:
         records = []
         for item in result:
             try:
-                fk = item.get("faceKey") or {}
-                ft = item.get("faceTarget") or {}
+                # /ainvr/api/face/search returns a FLAT structure (not nested faceKey/faceTarget)
+                # Fields: faceKeyId, cameraId, sceneId, datetime, file, position, confidence, ...
+                face_file = item.get("file", "")
+                # Derive scene thumbnail from face crop URL (e.g. _face0.jpg → _thumbnail.jpg)
+                scene_thumbnail = re.sub(r'_face(?:\d+|_\d+_crop)\.jpg$', '_thumbnail.jpg', face_file) if face_file else ""
                 records.append({
-                    "faceMatchId": item.get("faceMatchId"),
+                    "faceMatchId": item.get("faceKeyId") or item.get("faceMatchId"),
                     "datetime": item.get("datetime"),
-                    "cameraId": fk.get("cameraId", 0),
-                    "sceneId": fk.get("sceneId", 0),
-                    "faceTargetId": ft.get("faceTargetId", "unknown"),
-                    "faceTargetName": ft.get("name", "unknown"),
-                    "file": fk.get("file", ""),
-                    "position": fk.get("position", "0,0,0,0"),
-                    "confidence": fk.get("confidence", 0.0),
+                    "cameraId": item.get("cameraId", 0),
+                    "sceneId": item.get("sceneId", 0),
+                    "faceTargetId": item.get("faceTargetId", "unknown"),
+                    "faceTargetName": item.get("faceTargetName", "unknown"),
+                    "file": face_file,
+                    "sceneThumbnail": scene_thumbnail,
+                    "position": item.get("position", "0,0,0,0"),
+                    "confidence": item.get("confidence", 0.0),
                 })
             except Exception as e:
                 logger.warning(f"Failed to parse search result item: {e}")
         return records
+
 
     # ------------------------------------------------------------------ #
     #  FR: create abnormal event
