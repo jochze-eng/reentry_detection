@@ -187,15 +187,31 @@ Persists proxied images to avoid slow rendering times in the web UI.
 *   `content_type` (text) — MIME type (e.g. `image/jpeg`)
 *   `created_at` (timestamp with time zone) — creation timestamp used for automatic daily/hourly cleanup
 
+#### 6. `fr_history_cache` Table
+Persists dynamically-grouped historical match records for face detections to support instant loading on details expansion.
+*   `id` (serial, Primary Key)
+*   `parent_face_match_id` (bigint, Foreign Key to `fr_logs(face_match_id)` on delete cascade)
+*   `face_match_id` (bigint)
+*   `detected_at` (timestamp with time zone)
+*   `camera_id` (integer)
+*   `face_target_id` (text)
+*   `face_target_name` (text)
+*   `face_file` (text) — face crop image URL
+*   `scene_thumbnail` (text) — scene thumbnail URL
+*   `position` (text, default '0,0,0,0') — face bounding box coordinates
+*   `confidence` (double precision, default 0.0) — match confidence score
+*   Unique index on `(parent_face_match_id, face_match_id)` to prevent duplicates.
+
 ---
 
 ## Direct Vaidio NVR Search & Image Optimization
 
 To guarantee backward compatibility with legacy database records and optimize network load times:
-1. **Target History Routing**: Rather than relying solely on local database logs (which do not group unknown stranger faces dynamically or capture historical events occurred during offline periods), both LPR and FR history views query the Vaidio NVR search APIs directly (`/ainvr/api/lpr/plates` and `/ainvr/api/face/search` via face descriptors) to retrieve fresh occurrence lists, coordinates, and images.
+1. **Target History Routing**: For Face Recognition (FR), target history is retrieved directly from the local `fr_history_cache` database table (populated during polling or cached on first fallback load). This completely bypasses slow Vaidio NVR queries and loads instantly (sub-10ms). For License Plate Recognition (LPR) or legacy FR records (cache miss), history views query the Vaidio NVR search APIs directly (`/ainvr/api/lpr/plates` and `/ainvr/api/face/search` via face descriptors) to retrieve occurrence lists, coordinates, and images, and cache FR results to the local DB for subsequent loads.
 2. **Lightweight Thumbnails**: Frontend grids on the detail expansion pages load small `_thumbnail.jpg` scene images (10-30KB) instead of high-res scene snapshots (300KB - 1MB+), preventing connection queuing and ensuring fast rendering. Full-res snapshots are fetched on-demand inside the magnifying glass zoom modal.
 3. **Database Caching of Camera List & Status**: To guarantee sub-10ms settings page load times, the list of cameras (with their corresponding `"Activate"` / `"Deactivate"` status) is cached in the local PostgreSQL database. If the cache is stale (older than 5 minutes), a FastAPI background task asynchronously updates it from the Vaidio NVR without blocking the UI request.
 4. **Database Image Proxy Caching**: To accelerate face target details, license plate cards, and image grid loading times, requests to the `/api/image` endpoint are intercepted and cached in the local PostgreSQL database for a configurable retention window (default 72 hours). Setting this window to 0 disables the cache and purges all records.
+5. **Background Image Pre-Warming**: When a face match is processed and triggered, a background task automatically pre-fetches and caches all history face crops and scene thumbnails into the local `image_cache` table, guaranteeing instant image rendering when the user expands the detail view.
 
 ---
 
