@@ -64,8 +64,19 @@ class FRMonitor:
             logger.info(f"FR Init: found {len(records)} record(s), processing...")
             self.status = "processing"
             for record in records:
-                result = await self._process_record(record, cfg)
+                result, history_records = await self._process_record(record, cfg)
                 await db_manager.insert_fr_log(result)
+                if history_records:
+                    await db_manager.insert_fr_history_cache(result.faceMatchId, history_records)
+                    if cfg.image_cache_hours > 0:
+                        urls = []
+                        for hr in history_records:
+                            if hr.get("file"):
+                                urls.append(hr["file"])
+                            if hr.get("sceneThumbnail"):
+                                urls.append(hr["sceneThumbnail"])
+                        if urls:
+                            asyncio.create_task(pre_warm_image_cache(self._client, urls))
                 self.recent_logs.appendleft(result)
             self.cursor_id = max(r.faceMatchId for r in records)
             self.cursor_time = max(r.datetime for r in records)
@@ -132,8 +143,19 @@ class FRMonitor:
             self.stats["total_polled"] += len(new_records)
 
             for record in new_records:
-                result = await self._process_record(record, cfg)
+                result, history_records = await self._process_record(record, cfg)
                 await db_manager.insert_fr_log(result)
+                if history_records:
+                    await db_manager.insert_fr_history_cache(result.faceMatchId, history_records)
+                    if cfg.image_cache_hours > 0:
+                        urls = []
+                        for hr in history_records:
+                            if hr.get("file"):
+                                urls.append(hr["file"])
+                            if hr.get("sceneThumbnail"):
+                                urls.append(hr["sceneThumbnail"])
+                        if urls:
+                            asyncio.create_task(pre_warm_image_cache(self._client, urls))
                 self.recent_logs.appendleft(result)
 
             latest = max(new_records, key=lambda r: r.faceMatchId)
@@ -146,16 +168,22 @@ class FRMonitor:
     # ------------------------------------------------------------------ #
     #  Single Record Processing
     # ------------------------------------------------------------------ #
-    async def _process_record(self, record: FRRecord, cfg: AppConfig) -> FRProcessedRecord:
+    async def _process_record(self, record: FRRecord, cfg: AppConfig) -> tuple[FRProcessedRecord, list[dict]]:
         descriptor = None
+        history_records = []
         try:
             # Step 1: get descriptor from face image
             descriptor = await self._client.get_face_descriptor(record.file)
             if not descriptor:
                 raise ValueError("Empty descriptor returned")
 
-            # Step 2: search history count using descriptor
-            count = await self._client.search_face_count(descriptor)
+            # Step 2: search history records using descriptor with causal anchor + 5s grace period
+            history_records = await self._client.search_face_history(
+                descriptor,
+                anchor_dt=record.datetime,
+                lookback_hours=cfg.fr.lookback_hours
+            )
+            count = len(history_records)
             self.stats["total_processed"] += 1
             logger.info(f"[FR:{record.faceTargetName}] history_count={count} threshold={cfg.fr.threshold}")
 
@@ -184,7 +212,7 @@ class FRMonitor:
                         position=record.position,
                         confidence=record.confidence,
                         descriptor=descriptor,
-                    )
+                    ), history_records
 
             return FRProcessedRecord(
                 faceMatchId=record.faceMatchId,
@@ -199,7 +227,7 @@ class FRMonitor:
                 position=record.position,
                 confidence=record.confidence,
                 descriptor=descriptor,
-            )
+            ), history_records
 
         except Exception as e:
             self.stats["total_errors"] += 1
@@ -217,7 +245,7 @@ class FRMonitor:
                 position=record.position,
                 confidence=record.confidence,
                 descriptor=descriptor,
-            )
+            ), []
 
     # ------------------------------------------------------------------ #
     #  Status Snapshot (for API responses)
@@ -233,6 +261,23 @@ class FRMonitor:
 
     def get_logs(self, limit: int = 50) -> list[dict]:
         return [r.dict() for r in list(self.recent_logs)[:limit]]
+
+
+async def pre_warm_image_cache(client: VaidioClient, urls: list[str]):
+    for url in urls:
+        if not url:
+            continue
+        try:
+            cached = await db_manager.get_cached_image(url)
+            if not cached:
+                logger.info(f"Pre-warming image cache for {url}...")
+                async with client._client(timeout=10) as http_client:
+                    r = await http_client.get(url)
+                    r.raise_for_status()
+                    content_type = r.headers.get("content-type", "image/jpeg")
+                    await db_manager.insert_cached_image(url, r.content, content_type)
+        except Exception as e:
+            logger.warning(f"Failed to pre-warm image cache for {url}: {e}")
 
 
 # Global singleton

@@ -325,7 +325,7 @@
         const escapedFile = r.face_file ? r.face_file.replace(/'/g, "\\'") : '';
         const escapedTs = r.detected_at ? encodeURIComponent(r.detected_at) : '';
         const cam = camName(r.cameraId);
-        return `<tr class="clickable-row" onclick="openTargetDetails('${escapedFile}', '${escapedName}', '${escapedId}', '${escapedTs}')">
+        return `<tr class="clickable-row" onclick="openTargetDetails('${escapedFile}', '${escapedName}', '${escapedId}', '${escapedTs}', '${r.faceMatchId}')">
           <td>${fmtTime(r.detected_at)}</td>
           <td>${img}</td>
           <td><strong>${r.faceTargetName}</strong></td>
@@ -338,7 +338,7 @@
 
     // ── Target Details Expansion Page Logic ──
     // detectedAt is URL-encoded ISO timestamp from the clicked log row
-    async function openTargetDetails(faceFile, faceTargetName, faceTargetId, detectedAt) {
+    async function openTargetDetails(faceFile, faceTargetName, faceTargetId, detectedAt, faceMatchId) {
       showToast('Loading target: ' + (faceTargetName || faceTargetId), 'info');
       currentView = 'details';
       activeTarget = {
@@ -373,6 +373,7 @@
       try {
         let url = `/fr/target/history?face_target_id=${encodeURIComponent(faceTargetId)}&face_file=${encodeURIComponent(faceFile)}`;
         if (detectedAt) url += `&detected_at=${detectedAt}`;
+        if (faceMatchId) url += `&face_match_id=${faceMatchId}`;
         const history = await get(url);
         activeTarget.history = history;
         updateDetailsUI();

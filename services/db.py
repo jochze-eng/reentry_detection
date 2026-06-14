@@ -134,6 +134,24 @@ class DatabaseManager:
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_target ON fr_logs (face_target_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_detected ON fr_logs (detected_at DESC)")
 
+            # 3b. FR history cache table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS fr_history_cache (
+                    id SERIAL PRIMARY KEY,
+                    parent_face_match_id BIGINT REFERENCES fr_logs(face_match_id) ON DELETE CASCADE,
+                    face_match_id BIGINT NOT NULL,
+                    detected_at TIMESTAMP WITH TIME ZONE NOT NULL,
+                    camera_id INTEGER NOT NULL,
+                    face_target_id TEXT NOT NULL,
+                    face_target_name TEXT NOT NULL,
+                    face_file TEXT NOT NULL,
+                    scene_thumbnail TEXT NOT NULL,
+                    position TEXT DEFAULT '0,0,0,0',
+                    confidence DOUBLE PRECISION DEFAULT 0.0
+                )
+            """)
+            await conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_fr_history_cache_unique ON fr_history_cache (parent_face_match_id, face_match_id)")
+
             # Add camera selection columns to config table if they don't exist yet
             await conn.execute("""
                 ALTER TABLE config ADD COLUMN IF NOT EXISTS lpr_camera_ids TEXT DEFAULT ''
@@ -413,6 +431,76 @@ class DatabaseManager:
             await conn.execute("""
                 UPDATE fr_logs SET descriptor = $1 WHERE face_file = $2
             """, descriptor, face_file)
+
+
+    async def insert_fr_history_cache(self, parent_face_match_id: int, records: list[dict]):
+        if not self.pool:
+            await self.connect()
+
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                for r in records:
+                    dt = r.get("datetime")
+                    if isinstance(dt, str):
+                        dt = datetime.fromisoformat(dt)
+                    await conn.execute("""
+                        INSERT INTO fr_history_cache (
+                            parent_face_match_id, face_match_id, detected_at, camera_id,
+                            face_target_id, face_target_name, face_file, scene_thumbnail,
+                            position, confidence
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                        ON CONFLICT (parent_face_match_id, face_match_id) DO NOTHING
+                    """,
+                    parent_face_match_id,
+                    int(r.get("faceMatchId") or r.get("face_match_id") or 0),
+                    dt,
+                    int(r.get("cameraId") or 0),
+                    r.get("faceTargetId") or "unknown",
+                    r.get("faceTargetName") or "unknown",
+                    r.get("file") or r.get("face_file") or "",
+                    r.get("sceneThumbnail") or r.get("scene_thumbnail") or "",
+                    r.get("position") or "0,0,0,0",
+                    float(r.get("confidence") or 0.0)
+                    )
+
+    async def get_fr_history_cache(self, parent_face_match_id: int) -> list[dict] | None:
+        if not self.pool:
+            await self.connect()
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT face_match_id, detected_at, camera_id,
+                       face_target_id, face_target_name, face_file, scene_thumbnail,
+                       COALESCE(position, '0,0,0,0') as position,
+                       COALESCE(confidence, 0.0) as confidence
+                FROM fr_history_cache
+                WHERE parent_face_match_id = $1
+                ORDER BY detected_at DESC
+            """, parent_face_match_id)
+            
+            if not rows:
+                return None
+                
+            records = []
+            for row in rows:
+                d = dict(row)
+                if isinstance(d["detected_at"], datetime):
+                    d["datetime"] = d["detected_at"].isoformat()
+                else:
+                    d["datetime"] = d["detected_at"]
+                
+                records.append({
+                    "faceMatchId": d["face_match_id"],
+                    "datetime": d["datetime"],
+                    "cameraId": d["camera_id"],
+                    "faceTargetId": d["face_target_id"],
+                    "faceTargetName": d["face_target_name"],
+                    "file": d["face_file"],
+                    "sceneThumbnail": d["scene_thumbnail"],
+                    "position": d["position"],
+                    "confidence": d["confidence"]
+                })
+            return records
 
 
     async def get_fr_logs(self, limit: int = 50) -> list[dict]:

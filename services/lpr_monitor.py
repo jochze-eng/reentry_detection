@@ -148,7 +148,7 @@ class LPRMonitor:
     # ------------------------------------------------------------------ #
     async def _process_record(self, record: LPRRecord, cfg: AppConfig) -> ProcessedRecord:
         try:
-            count = await self._client.get_plate_history_count(record.characters)
+            count = await self._client.get_plate_history_count(record.characters, anchor_dt=record.datetime)
             self.stats["total_processed"] += 1
             logger.info(f"[LPR:{record.characters}] history_count={count} threshold={cfg.job.threshold}")
 

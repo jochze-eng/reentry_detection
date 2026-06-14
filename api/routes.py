@@ -266,16 +266,26 @@ async def get_fr_target_history(
     face_target_id: str = Query(...),
     face_file: str = Query(default=None),
     detected_at: str = Query(default=None),
+    face_match_id: int = Query(default=None),
 ):
-    """Return detections for a face target within the configured Check Period.
-    When detected_at is provided (from the clicked log row), the window is
-    detected_at - lookback_hours → detected_at — exactly the window the monitor
-    used when it computed history_count for that row. So a row showing 1 hit
-    will expand to show exactly 1 detection, and 2 hits will show 2, etc.
+    """Return detections for a face target.
+    First tries to retrieve cached history from the local database. If missed,
+    falls back to querying Vaidio and caching the result.
     """
     cfg = await load_config()
     if not cfg:
         raise HTTPException(status_code=404, detail="No config found")
+
+    # 1. Try to fetch from database fr_history_cache first
+    if face_match_id:
+        try:
+            cached_records = await db_manager.get_fr_history_cache(face_match_id)
+            if cached_records is not None:
+                logger.info(f"FR Target history cache HIT for face_match_id={face_match_id}")
+                return cached_records
+            logger.info(f"FR Target history cache MISS for face_match_id={face_match_id}")
+        except Exception as cache_err:
+            logger.warning(f"Error reading fr_history_cache: {cache_err}")
 
     # Parse the anchor timestamp (from the clicked row), fall back to now
     anchor_dt = None
@@ -308,6 +318,13 @@ async def get_fr_target_history(
                     lookback_hours=cfg.fr.lookback_hours,
                 )
                 if records:
+                    # Cache the fetched records in database
+                    if face_match_id:
+                        try:
+                            await db_manager.insert_fr_history_cache(face_match_id, records)
+                            logger.info(f"Cached history records in DB for face_match_id={face_match_id}")
+                        except Exception as cache_err:
+                            logger.warning(f"Failed to write fr_history_cache: {cache_err}")
                     return records
                 # Vaidio returned empty (e.g. stranger with no other matches in the window).
                 # Fall through to DB to return at least the clicked record itself.

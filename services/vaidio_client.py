@@ -128,10 +128,17 @@ class VaidioClient:
         data = await self._get_lpr_page(start=start, end=end, page=0)
         return [LPRRecord(**r) for r in data.get("content", [])]
 
-    async def get_plate_history_count(self, characters: str) -> int:
-        now = datetime.now()
-        start = now - timedelta(hours=self.job.lookback_hours)
-        data = await self._get_lpr_page(start=start, end=now, characters=characters)
+    async def get_plate_history_count(self, characters: str, anchor_dt: datetime = None) -> int:
+        if anchor_dt is not None:
+            if hasattr(anchor_dt, 'tzinfo') and anchor_dt.tzinfo is not None:
+                anchor_dt = anchor_dt.astimezone().replace(tzinfo=None)
+            end = anchor_dt + timedelta(seconds=5)
+            start = anchor_dt - timedelta(hours=self.job.lookback_hours)
+        else:
+            now = datetime.now()
+            end = now
+            start = now - timedelta(hours=self.job.lookback_hours)
+        data = await self._get_lpr_page(start=start, end=end, characters=characters)
         return data.get("totalElements", 0)
 
     async def search_lpr_history(self, characters: str) -> list[dict]:
@@ -366,12 +373,19 @@ class VaidioClient:
     # ------------------------------------------------------------------ #
     #  FR: search face history count using descriptor
     # ------------------------------------------------------------------ #
-    async def search_face_count(self, descriptor: str) -> int:
-        now = datetime.now()
-        start = now - timedelta(hours=self.fr.lookback_hours)
+    async def search_face_count(self, descriptor: str, anchor_dt: datetime = None) -> int:
+        if anchor_dt is not None:
+            if hasattr(anchor_dt, 'tzinfo') and anchor_dt.tzinfo is not None:
+                anchor_dt = anchor_dt.astimezone().replace(tzinfo=None)
+            end = anchor_dt + timedelta(seconds=5)
+            start = anchor_dt - timedelta(hours=self.fr.lookback_hours)
+        else:
+            now = datetime.now()
+            end = now
+            start = now - timedelta(hours=self.fr.lookback_hours)
         data = {
             "start":      start.strftime("%Y-%m-%d %H:%M:%S"),
-            "end":        now.strftime("%Y-%m-%d %H:%M:%S"),
+            "end":        end.strftime("%Y-%m-%d %H:%M:%S"),
             "descriptor": descriptor,
             "scores":     "0.7",
         }
@@ -397,7 +411,7 @@ class VaidioClient:
     # ------------------------------------------------------------------ #
     async def search_face_history(self, descriptor: str, anchor_dt=None, lookback_hours: int = None) -> list[dict]:
         # When anchor_dt is provided (user clicked a specific log row), the window is
-        # anchor_dt - lookback_hours → anchor_dt  — exactly the same window that was
+        # anchor_dt - lookback_hours → anchor_dt + 5 seconds — exactly the same window that was
         # used by the monitor when it computed history_count for that detection.
         # This means clicking a row with history_count=1 will return exactly 1 result.
         # Falls back to now - lookback_hours → now when anchor_dt is None (monitoring path).
@@ -410,7 +424,7 @@ class VaidioClient:
             if hasattr(anchor_dt, 'tzinfo') and anchor_dt.tzinfo is not None:
                 # Convert UTC-aware → local naive (astimezone uses the OS local TZ, i.e. SGT)
                 anchor_dt = anchor_dt.astimezone().replace(tzinfo=None)
-            end = anchor_dt
+            end = anchor_dt + timedelta(seconds=5)
             start = anchor_dt - timedelta(hours=lookback_hours)
         else:
             end = datetime.now()
