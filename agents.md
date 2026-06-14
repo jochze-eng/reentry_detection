@@ -1,0 +1,227 @@
+# Recurring Target Detection — Agent & Codebase Guide
+
+## Overview
+
+This is a **FastAPI-based monitoring service** that integrates with the **Vaidio AINVR platform** to automatically detect and flag recurring security threats. It polls the Vaidio API for two types of detection events, tracks how frequently each target appears, and creates abnormal scene events when a target exceeds a configured threshold within a lookback window.
+
+**Two detection modes are supported:**
+
+| Mode | What it tracks | Default threshold | Default lookback |
+|------|---------------|-------------------|------------------|
+| **LPR** (License Plate Recognition) | Vehicles by plate characters | 10 detections | 24 hours |
+| **FR** (Face Recognition) | Individuals by face identity | 3 detections | 24 hours |
+
+The service exposes a web UI at `http://<host>:8088` for configuration and real-time log monitoring.
+
+---
+
+## Architecture
+
+```
+main.py                  ← FastAPI app entry point, lifespan startup/shutdown
+config.py                ← Load/save config.json (Pydantic-backed)
+api/
+  routes.py              ← REST endpoints (/api/config, /api/monitor/*, /api/fr/*, /api/image)
+models/
+  config_model.py        ← AppConfig, VaidioConfig, JobConfig, FRConfig (Pydantic)
+  lpr_model.py           ← LPRRecord, ProcessedRecord
+  fr_model.py            ← FRRecord, FRProcessedRecord
+services/
+  lpr_monitor.py         ← LPRMonitor: async polling loop for license plates
+  fr_monitor.py          ← FRMonitor: async polling loop for face matches
+  vaidio_client.py       ← VaidioClient: all HTTP calls to the Vaidio AINVR API
+static/
+  lpr.html               ← LPR Monitor dashboard page (served at /)
+  fr.html                ← FR Monitor dashboard page (served at /fr)
+  settings.html          ← Settings configuration page (served at /settings)
+  style.css              ← Stylesheet
+```
+
+---
+
+## How It Works
+
+### Startup
+
+`main.py` uses an async lifespan context manager. On startup, it reads `config.json` and conditionally starts `LPRMonitor` and/or `FRMonitor` depending on whether each is enabled. On shutdown, both monitors are stopped gracefully.
+
+### Cursor-Based Polling Loop (shared by both monitors)
+
+Each monitor runs an independent async polling loop:
+
+1. **Initialize**: Fetch records from the last 30 seconds to set an initial cursor (`cursor_id`, `cursor_time`).
+2. **Poll every N seconds** (configurable, default 30s):
+   - Query Vaidio for records from `cursor_time - 3s` to now (3-second overlap prevents missed events).
+   - Filter out records with ID ≤ `cursor_id` to deduplicate overlapping records.
+   - Advance cursor to the highest ID/time in the new batch.
+3. **Process each new record** (see below).
+4. **Log result** to an in-memory deque (max 200 entries, FIFO).
+
+### LPR Processing (`services/lpr_monitor.py:146–198`)
+
+For each new license plate detection:
+1. Call `get_plate_history_count()` — counts all detections of that plate string in the lookback window.
+2. If count > threshold → call `create_lpr_abnormal_event()` to post a scene event to Vaidio with vehicle bounding box and snapshot image.
+3. Record the result (triggered / not triggered / error) in the log.
+
+### FR Processing (`services/fr_monitor.py:146–192`)
+
+For each new face match detection (two-step):
+1. **Extract descriptor**: POST the face image URL to `/ainvr/api/face` → get a neural embedding vector.
+2. **Search history**: POST that descriptor to `/ainvr/api/face/search` → count similar faces in the lookback window.
+3. If count > threshold → call `create_fr_abnormal_event()` to post a scene event with person bounding box and face thumbnail.
+4. Record result in the log; thumbnail is proxied via `/api/image` to bypass CORS.
+
+### State Machine
+
+Each monitor transitions through these states:
+
+```
+stopped → initializing → idle → polling → processing → idle → ...
+                                                      ↘ error
+```
+
+State is visible in the web UI status badge (with animated pulse during active states).
+
+---
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Serves the LPR Monitor dashboard page (`static/lpr.html`) |
+| `GET` | `/fr` | Serves the FR Monitor dashboard page (`static/fr.html`) |
+| `GET` | `/settings` | Serves the Settings page (`static/settings.html`) |
+| `GET` | `/api/image?url=...` | Image proxy (bypasses SSL/CORS for Vaidio images) |
+| `GET` | `/api/config` | Returns current config (API key masked to first 6 chars) |
+| `POST` | `/api/config` | Saves config and restarts monitors |
+| `POST` | `/api/config/test` | Tests connectivity to the Vaidio server |
+| `GET` | `/api/monitor/status` | LPR monitor status snapshot (includes `unique_lpr_count` in stats) |
+| `GET` | `/api/monitor/logs` | Recent LPR log entries (default 50, max 200) |
+| `GET` | `/api/fr/status` | FR monitor status snapshot (includes `unique_fr_count` in stats) |
+| `GET` | `/api/fr/logs` | Recent FR log entries (default 50, max 200) |
+| `GET` | `/api/fr/target/history?face_file=...` | Retrieves face similarity matches history from Vaidio for target details view |
+
+---
+
+## Configuration & Data Persistence (PostgreSQL)
+
+Rather than using local files (`config.json`) or in-memory arrays (caching), the application stores both its configuration parameters and processed target logs in a PostgreSQL database.
+
+### Database Connection
+Connection parameters are loaded from environment variables with the following defaults:
+- `DB_HOST`: Hostname of the PostgreSQL server (default: `db` inside Docker network, or `localhost` for local dev)
+- `DB_PORT`: Port (default: `5432` internally, mapped to `5434` externally on host)
+- `DB_USER`: Username (default: `rtd_user`)
+- `DB_PASSWORD`: Password (default: `rtd_password`)
+- `DB_NAME`: Database name (default: `recurring_target_detection`)
+
+### Database Schema
+
+Upon startup, the application automatically initializes the following tables if they do not exist:
+
+#### 1. `config` Table
+Stores the global app configuration (exactly 1 row).
+*   `id` (integer, Primary Key, constraint: `id = 1` to guarantee a single row)
+*   `vaidio_base_url` (text)
+*   `vaidio_api_key` (text)
+*   `lpr_enabled` (boolean)
+*   `lpr_poll_interval` (integer)
+*   `lpr_page_size` (integer)
+*   `lpr_lookback_hours` (integer)
+*   `lpr_threshold` (integer)
+*   `fr_enabled` (boolean)
+*   `fr_poll_interval` (integer)
+*   `fr_lookback_hours` (integer)
+*   `fr_threshold` (integer)
+
+#### 2. `lpr_logs` Table
+Persists processed License Plate Recognition detection events.
+*   `id` (serial, Primary Key)
+*   `license_plate_id` (bigint, unique index)
+*   `characters` (text)
+*   `confidence` (double precision)
+*   `detected_at` (timestamp with time zone)
+*   `camera_id` (integer)
+*   `history_count` (integer)
+*   `triggered` (boolean)
+*   `event_created` (boolean)
+*   `error_msg` (text, nullable)
+*   `file` (text, nullable) — cropped plate image URL
+*   `scene_thumbnail` (text, nullable) — scene thumbnail URL
+*   `position` (text, default '0,0,0,0') — plate bounding box coordinates
+
+#### 3. `fr_logs` Table
+Persists processed Face Recognition detection events.
+*   `id` (serial, Primary Key)
+*   `face_match_id` (bigint, unique index)
+*   `face_target_id` (text)
+*   `face_target_name` (text)
+*   `face_file` (text) — face crop image URL
+*   `detected_at` (timestamp with time zone)
+*   `camera_id` (integer)
+*   `history_count` (integer)
+*   `triggered` (boolean)
+*   `event_created` (boolean)
+*   `error_msg` (text, nullable)
+*   `position` (text, default '0,0,0,0') — face bounding box coordinates
+*   `confidence` (double precision, default 0.0) — match confidence score
+
+---
+
+## Direct Vaidio NVR Search & Image Optimization
+
+To guarantee backward compatibility with legacy database records and optimize network load times:
+1. **Target History Routing**: Rather than relying solely on local database logs (which do not group unknown stranger faces dynamically or capture historical events occurred during offline periods), both LPR and FR history views query the Vaidio NVR search APIs directly (`/ainvr/api/lpr/plates` and `/ainvr/api/face/search` via face descriptors) to retrieve fresh occurrence lists, coordinates, and images.
+2. **Lightweight Thumbnails**: Frontend grids on the detail expansion pages load small `_thumbnail.jpg` scene images (10-30KB) instead of high-res scene snapshots (300KB - 1MB+), preventing connection queuing and ensuring fast rendering. Full-res snapshots are fetched on-demand inside the magnifying glass zoom modal.
+
+---
+
+## System & API Logging (7-day Rotating Logs)
+
+The service implements a detailed logging mechanism for system activities, incoming client API calls, outgoing requests to the Vaidio server, and errors/exceptions.
+
+### Log Rotation & Storage
+- **File Rotation**: Log records are written using a `TimedRotatingFileHandler` with daily rotation (`when='D'`, `interval=1`) retaining a backup count of 7 (`backupCount=7`) to guarantee 7 days of rolling logs.
+- **Log Location**: Logs are written to `/app/logs/app.log` inside the container. This is mapped via Docker volumes to `./logs/app.log` on the host. If the directory is not writable, it falls back to a local `logs/` directory inside the project root.
+- **Formatter**: `%(asctime)s [%(levelname)s] %(name)s (%(filename)s:%(lineno)d): %(message)s`
+
+### Logging Scope
+1. **Incoming Request Middleware**: Logged in `main.py` using a FastAPI middleware that intercepts all incoming client HTTP calls, logging the request method, path, query parameters, response status codes, processing time (duration in ms), and any unhandled exceptions (along with their stack trace).
+2. **Outgoing Vaidio Client HTTP Calls**: Logged in `services/vaidio_client.py` using HTTPX event hooks on `httpx.AsyncClient`:
+   - **Request Hook**: Logs method, URL, headers, and request body (truncating large body texts and logging `[Multipart/Form-Data File Upload]` for file uploads to avoid bloating). Sensitive header parameters like `Vaidio-API-key` are masked.
+   - **Response Hook**: Logs method, URL, status code, and response body (truncating responses to 1000 characters and summarizing binary content types like images).
+3. **Uvicorn Server Logs**: Server logs from uvicorn loggers (`uvicorn`, `uvicorn.error`, `uvicorn.access`) are also piped to the rotating file handler.
+
+---
+
+## Docker & Deployment Environment
+
+### Production Docker Container Status on Test PC
+
+The service is currently running in a Docker container on the remote test machine (`100.101.159.22`).
+
+**Container Configuration details:**
+- **Container Name**: `recurring_target_detection`
+- **Image**: `recurring-target-detection:latest`
+- **Port Mapping**: `8088:8088` (external web UI is accessible at `http://100.101.159.22:8088`)
+- **Docker Network**: Runs in its own private network with a dedicated database container named `rtd_db` (accessible inside the docker-compose stack as service `db` on port 5432).
+- **Config & Log persistence**: stored in the dedicated database container `rtd_db` using volume `rtd_db_data` (mapped to host port `5434` for external access).
+- **System time / TZ**: synchronized with host `/etc/localtime`, set to `Asia/Singapore`.
+
+### Remote Test PC Credentials
+- **IP Address**: `100.101.159.22`
+- **Username**: `superuser`
+- **Password**: `usersuper888`
+
+---
+
+## Key Implementation Notes
+
+- **SSL verification disabled** (`verify=False` in `vaidio_client.py:20`) to support self-signed Vaidio certificates.
+- **Overlap window**: 3-second overlap on each poll prevents missed events at interval boundaries.
+- **JPEG validation**: Image bytes are validated by checking for `\xff\xd8` magic bytes before uploading to Vaidio.
+- **Image URL normalization**: Suffixes like `_face1.jpg` and `_thumbnail.jpg` are stripped before downloading full images.
+- **Scene Image Suffix Derivation**: Resolves the original scene snapshot URL directly from face crop URLs without extra NVR queries (substituting `_crop.jpg` or `_face*.jpg` naming conventions).
+- **Dynamic Bounding Box & Magnifier**: Bounding boxes scale reactively based on natural-to-client dimension ratios, coupled with a hover-based magnifying zoom lens.
+- **Async throughout**: All I/O (HTTP, file ops) uses `asyncio` / `httpx` / `aiofiles` — no blocking calls.

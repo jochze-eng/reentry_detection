@@ -1,0 +1,48 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: rtd_db
+    restart: unless-stopped
+    ports:
+      - "5434:5432"
+    volumes:
+      - rtd_db_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=rtd_user
+      - POSTGRES_PASSWORD=rtd_password
+      - POSTGRES_DB=recurring_target_detection
+      - TZ=Asia/Singapore
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rtd_user -d recurring_target_detection"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: recurring-target-detection:latest
+    container_name: recurring_target_detection
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      # Sync timezone with the host
+      - /etc/localtime:/etc/localtime:ro
+      - ./logs:/app/logs
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Singapore
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=rtd_user
+      - DB_PASSWORD=rtd_password
+      - DB_NAME=recurring_target_detection
+
+volumes:
+  rtd_db_data:
+    driver: local

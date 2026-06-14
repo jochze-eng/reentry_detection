@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vaidio LPR Monitor - Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="app-container">
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        Vaidio <span>RTD</span>
+      </div>
+      <nav class="sidebar-menu">
+        <li class="sidebar-item active">
+          <a href="/">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+            LPR Monitor
+          </a>
+        </li>
+        <li class="sidebar-item">
+          <a href="/fr">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 21a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/></svg>
+            FR Monitor
+          </a>
+        </li>
+        <li class="sidebar-item">
+          <a href="/settings">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Settings
+          </a>
+        </li>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <div class="sidebar-status-title">Engine Status</div>
+        
+        <div class="sidebar-badge" id="sidebar-badge-lpr">
+          <div class="sidebar-badge-info">
+            <span class="dot dot-stopped" id="lpr-status-dot"></span>
+            <span>LPR Monitor</span>
+          </div>
+          <span class="status-text dot-stopped" id="lpr-status-text">stopped</span>
+        </div>
+        
+        <div class="sidebar-badge" id="sidebar-badge-fr">
+          <div class="sidebar-badge-info">
+            <span class="dot dot-stopped" id="fr-status-dot"></span>
+            <span>FR Monitor</span>
+          </div>
+          <span class="status-text dot-stopped" id="fr-status-text">stopped</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Panel -->
+    <main class="main-content">
+      <div class="header-row">
+        <h1 class="page-title">LPR Monitor</h1>
+        <p class="page-subtitle">Live license plate recognition tracking — refreshes every 3 seconds</p>
+      </div>
+
+      <div class="dashboard-grid">
+        <!-- LPR Monitor Card -->
+        <div class="card">
+          <div class="card-header">
+            <span class="monitor-name">LPR Monitor Status & Logs</span>
+          </div>
+          <div class="stats-row">
+            <div class="stat-box">
+              <div class="stat-num" id="lpr-stat-unique">0</div>
+              <div class="stat-label">Unique LPR</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-num" id="lpr-stat-processed">0</div>
+              <div class="stat-label">Processed</div>
+            </div>
+            <div class="stat-box">
+              <div class="stat-num" id="lpr-stat-triggered">0</div>
+              <div class="stat-label">Triggered</div>
+            </div>
+          </div>
+          
+          <div class="cursor-info" id="lpr-cursor-info">Cursor: —</div>
+          
+          <div class="log-meta">
+            <div class="log-title">Recent Logs</div>
+            <div class="log-count" id="lpr-log-count"></div>
+          </div>
+          
+          <div class="log-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Plate</th>
+                  <th>Camera</th>
+                  <th>Hits</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="lpr-log-body">
+                <tr><td colspan="5" class="empty-log">No records yet</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Target Details (Expansion View) -->
+      <div id="lpr-target-details" class="target-details-container" style="display: none;">
+        <div class="back-btn-row">
+          <button class="back-btn" onclick="closeTargetDetails()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+            Close
+          </button>
+        </div>
+
+        <!-- Target Header Card -->
+        <div class="card">
+          <div class="profile-card">
+            <div class="plate-avatar-wrap">
+              <img id="detail-profile-img" class="plate-avatar" src="" onerror="this.style.display='none'">
+            </div>
+            <div class="profile-info">
+              <div class="profile-name-row">
+                <span id="detail-profile-name" class="profile-name">-</span>
+              </div>
+              <div id="detail-profile-id" class="profile-id">License Plate Target</div>
+              <div class="profile-tags">
+                <span id="detail-profile-type" class="tag-badge accent">LPR Target</span>
+                <span id="detail-profile-hits" class="tag-badge">Hits: -</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Timeline Section -->
+        <div class="card timeline-chart-card">
+          <div class="chart-header">
+            <span class="chart-title">Appearance History</span>
+            <div class="btn-group">
+              <button id="toggle-hour" class="btn-pill" onclick="setChartInterval('hour')">Hour</button>
+              <button id="toggle-day" class="btn-pill active" onclick="setChartInterval('day')">Day</button>
+            </div>
+          </div>
+          <div class="timeline-chart-wrap">
+            <div class="timeline-bars" id="timeline-chart-bars">
+              <!-- Dynamically populated bars -->
+            </div>
+            <div class="chart-x-labels" id="timeline-chart-labels">
+              <!-- Dynamically populated labels -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Detections Grid Section -->
+        <div class="log-meta">
+          <div class="log-title">Matched Detections</div>
+          <div class="log-count" id="detail-detections-count">0 entries</div>
+        </div>
+        <div class="detections-grid" id="detail-detections-grid">
+          <!-- Dynamically populated detection cards -->
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast"></div>
+
+  <!-- Zoom Detail Modal -->
+  <div id="detail-modal" class="modal-overlay" onclick="closeDetailModal(event)">
+    <div class="modal-card" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title" id="modal-title-text">Original Snapshot</span>
+        <button class="modal-close-btn" onclick="hideDetailModal()">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-img-container" id="modal-image-wrap" onmousemove="handleLensMove(event)" onmouseleave="hideLens()" onmouseenter="showLens()">
+          <div id="modal-zoom-lens" class="zoom-lens"></div>
+          <img id="modal-scene-img" class="modal-scene-image" src="" alt="Scene Snapshot" onload="initBoundingBox()">
+          <div id="modal-bounding-box" class="zoom-bounding-rect"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-meta-info">
+          <div class="modal-meta-item">Time: <strong id="modal-meta-time">-</strong></div>
+          <div class="modal-meta-item">Camera: <strong id="modal-meta-cam">-</strong></div>
+          <div class="modal-meta-item">Confidence: <strong id="modal-meta-conf">-</strong></div>
+        </div>
+        <div class="modal-actions">
+          <button id="modal-toggle-lens-btn" class="back-btn modal-btn" onclick="toggleLensSetting()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Lens: Off
+          </button>
+          <button id="modal-toggle-box-btn" class="back-btn modal-btn active" onclick="toggleBoxSetting()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+            Box: On
+          </button>
+          <button class="btn-primary modal-btn" onclick="downloadModalImage()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+            Download
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const API = '/api';
+
+    let cameraMap = {};  // cameraId (number) → camera name (string)
+    let currentView = 'dashboard';
+    let activeTarget = null;
+    let chartInterval = 'day';
+    let isLensEnabled = false;
+    let isBoxEnabled = true;
+    let selectedDetection = null;
+    let imageNaturalWidth = 1920;
+    let imageNaturalHeight = 1080;
+
+    window.addEventListener('DOMContentLoaded', () => {
+      refreshStatus();
+      setInterval(refreshStatus, 3000);
+    });
+
+    // Resolve camera name with fallback
+    function camName(cameraId) {
+      return cameraMap[cameraId] || cameraMap[String(cameraId)] || `Cam ${cameraId}`;
+    }
+
+    function fmtTime(ts) {
+      const d = new Date(ts);
+      const mm = String(d.getMonth()+1).padStart(2,'0');
+      const dd = String(d.getDate()).padStart(2,'0');
+      const hh = String(d.getHours()).padStart(2,'0');
+      const mi = String(d.getMinutes()).padStart(2,'0');
+      const ss = String(d.getSeconds()).padStart(2,'0');
+      return `${mm}/${dd} ${hh}:${mi}:${ss}`;
+    }
+
+    // ── Status refresh ──
+    async function refreshStatus() {
+      try {
+        const [lprStatus, frStatus, lprLogs, cameras] = await Promise.all([
+          get('/monitor/status'),
+          get('/fr/status'),
+          get('/monitor/logs?limit=50'),
+          get('/cameras'),
+        ]);
+
+        // Merge new camera entries (keys come as strings from JSON)
+        Object.entries(cameras).forEach(([id, name]) => {
+          cameraMap[Number(id)] = name;
+          cameraMap[id] = name;
+        });
+
+        updateStatusUI('lpr', lprStatus);
+        updateStatusUI('fr',  frStatus);
+        updateLPRLogs(lprLogs);
+      } catch (err) {
+        console.error('Error refreshing status:', err);
+      }
+    }
+
+    const DOT_CLASSES = ['dot-stopped', 'dot-initializing', 'dot-polling', 'dot-processing', 'dot-idle', 'dot-error'];
+
+    function updateStatusUI(prefix, s) {
+      const dotEl = document.getElementById(`${prefix}-status-dot`);
+      const textEl = document.getElementById(`${prefix}-status-text`);
+      
+      if (dotEl && textEl) {
+        DOT_CLASSES.forEach(c => {
+          dotEl.classList.remove(c);
+          textEl.classList.remove(c);
+        });
+        
+        const statusClass = `dot-${s.status || 'stopped'}`;
+        dotEl.classList.add(statusClass);
+        textEl.classList.add(statusClass);
+        textEl.textContent = s.status || 'stopped';
+      }
+
+      // Update active page cursor and stats
+      if (prefix === 'lpr') {
+        const cursorEl = document.getElementById(`lpr-cursor-info`);
+        if (cursorEl) {
+          cursorEl.textContent = s.cursor_id
+            ? `Cursor: id=${s.cursor_id}  ·  ${s.cursor_time ? fmtTime(s.cursor_time) : '—'}`
+            : 'Cursor: —';
+        }
+
+        const stats = s.stats || {};
+        const uniqueEl = document.getElementById(`lpr-stat-unique`);
+        const processedEl = document.getElementById(`lpr-stat-processed`);
+        const triggeredEl = document.getElementById(`lpr-stat-triggered`);
+        
+        if (uniqueEl) uniqueEl.textContent = stats.unique_lpr_count ?? 0;
+        if (processedEl) processedEl.textContent = stats.total_processed ?? 0;
+        if (triggeredEl) triggeredEl.textContent = stats.total_triggered ?? 0;
+      }
+    }
+
+    function updateLPRLogs(logs) {
+      // Do not overwrite logs table if the user is in target details view
+      if (currentView === 'details') return;
+
+      const tbody = document.getElementById('lpr-log-body');
+      const countEl = document.getElementById('lpr-log-count');
+      if (countEl) countEl.textContent = logs.length ? `${logs.length} entries` : '';
+      if (!tbody) return;
+      if (!logs.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-log">No records yet</td></tr>';
+        return;
+      }
+      const sorted = [...logs].sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
+      tbody.innerHTML = sorted.map(r => {
+        const tag = r.error ? '<span class="tag tag-error">error</span>'
+                  : r.triggered ? '<span class="tag tag-triggered">triggered</span>'
+                  : '<span class="tag tag-ok">ok</span>';
+        const cam = camName(r.cameraId);
+        const escapedCharacters = r.characters ? r.characters.replace(/'/g, "\\'") : '';
+        const escapedFile = r.file ? r.file.replace(/'/g, "\\'") : '';
+        return `<tr class="clickable-row" onclick="openTargetDetails('${escapedFile}', '${escapedCharacters}')">
+          <td>${fmtTime(r.detected_at)}</td>
+          <td><strong>${r.characters}</strong></td>
+          <td class="cam-name-cell" title="ID: ${r.cameraId}">${cam}</td>
+          <td>${r.history_count}</td>
+          <td>${tag}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    // ── Target Details Expansion Page Logic ──
+    async function openTargetDetails(plateFile, characters) {
+      showToast('Loading target plate: ' + characters, 'info');
+      currentView = 'details';
+      activeTarget = {
+        plateFile: plateFile,
+        characters: characters,
+        history: []
+      };
+
+      // Toggle views
+      document.querySelector('.dashboard-grid').style.display = 'none';
+      document.getElementById('lpr-target-details').style.display = 'flex';
+
+      // Update profile UI immediately
+      const profileImg = document.getElementById('detail-profile-img');
+      if (plateFile) {
+        profileImg.src = `/api/image?url=${encodeURIComponent(plateFile)}`;
+        profileImg.style.display = '';
+      } else {
+        profileImg.style.display = 'none';
+      }
+      document.getElementById('detail-profile-name').textContent = characters || 'Unknown';
+      document.getElementById('detail-profile-hits').textContent = `Hits: -`;
+
+      // Reset intervals
+      chartInterval = 'day';
+      document.getElementById('toggle-hour').classList.remove('active');
+      document.getElementById('toggle-day').classList.add('active');
+
+      // Load history from DB via characters
+      try {
+        const history = await get(`/monitor/target/history?characters=${encodeURIComponent(characters)}`);
+        activeTarget.history = history;
+        updateDetailsUI();
+      } catch (err) {
+        console.error('Error loading target history:', err);
+        showToast('Error loading history: ' + err.message, 'error');
+        updateDetailsUI(); // Still render (empty state)
+      }
+    }
+
+    function closeTargetDetails() {
+      currentView = 'dashboard';
+      activeTarget = null;
+      document.getElementById('lpr-target-details').style.display = 'none';
+      document.querySelector('.dashboard-grid').style.display = '';
+      refreshStatus(); // Refresh logs immediately
+    }
+
+    function setChartInterval(interval) {
+      chartInterval = interval;
+      document.getElementById('toggle-hour').classList.toggle('active', interval === 'hour');
+      document.getElementById('toggle-day').classList.toggle('active', interval === 'day');
+      renderTimelineChart();
+    }
+
+    function renderTimelineChart() {
+      const barsContainer = document.getElementById('timeline-chart-bars');
+      const labelsContainer = document.getElementById('timeline-chart-labels');
+      if (!barsContainer || !labelsContainer || !activeTarget) return;
+
+      const history = activeTarget.history || [];
+      const buckets = {};
+
+      if (chartInterval === 'day') {
+        // Group by YYYY-MM-DD for the last 7 days
+        const today = new Date();
+        for (let i = 6; i >= 0; i--) {
+          const d = new Date(today);
+          d.setDate(today.getDate() - i);
+          const dateStr = d.toISOString().split('T')[0];
+          buckets[dateStr] = 0;
+        }
+        history.forEach(item => {
+          const dateStr = new Date(item.datetime).toISOString().split('T')[0];
+          if (buckets[dateStr] !== undefined) {
+            buckets[dateStr]++;
+          }
+        });
+      } else {
+        // Group by hour for the last 24 hours
+        const now = new Date();
+        for (let i = 23; i >= 0; i--) {
+          const d = new Date(now);
+          d.setHours(now.getHours() - i);
+          const hourStr = `${String(d.getHours()).padStart(2, '0')}:00`;
+          buckets[hourStr] = 0;
+        }
+        history.forEach(item => {
+          const d = new Date(item.datetime);
+          const hourStr = `${String(d.getHours()).padStart(2, '0')}:00`;
+          if (buckets[hourStr] !== undefined) {
+            buckets[hourStr]++;
+          }
+        });
+      }
+
+      const keys = Object.keys(buckets).sort();
+      const maxCount = Math.max(...Object.values(buckets), 1);
+
+      barsContainer.innerHTML = keys.map(key => {
+        const count = buckets[key];
+        const pct = (count / maxCount) * 85; // cap height for styling
+        const displayLabel = chartInterval === 'day' ? fmtDateLabel(key) : key;
+        return `
+          <div class="chart-bar-container">
+            <div class="chart-bar-fill" style="height: ${count > 0 ? Math.max(pct, 5) : 0}%"></div>
+            <div class="chart-bar-tooltip">${count} appearance${count !== 1 ? 's' : ''}<br>${displayLabel}</div>
+          </div>
+        `;
+      }).join('');
+
+      labelsContainer.innerHTML = keys.map(key => {
+        const displayLabel = chartInterval === 'day' ? fmtDateLabel(key) : key;
+        return `<span class="chart-x-label" title="${displayLabel}">${displayLabel}</span>`;
+      }).join('');
+    }
+
+    function fmtDateLabel(dateStr) {
+      const parts = dateStr.split('-');
+      if (parts.length < 3) return dateStr;
+      return `${parts[1]}/${parts[2]}`; // MM/DD
+    }
+
+    function updateDetailsUI() {
+      if (!activeTarget) return;
+
+      const countEl = document.getElementById('detail-detections-count');
+      const history = activeTarget.history || [];
+      if (countEl) {
+        countEl.textContent = `${history.length} detection${history.length !== 1 ? 's' : ''}`;
+      }
+      document.getElementById('detail-profile-hits').textContent = `Hits: ${history.length}`;
+
+      renderTimelineChart();
+
+      const grid = document.getElementById('detail-detections-grid');
+      if (!grid) return;
+      if (!history.length) {
+        grid.innerHTML = '<div class="empty-log">No detections found in lookback period.</div>';
+        return;
+      }
+
+      const sorted = [...history].sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
+
+      grid.innerHTML = sorted.map((item, idx) => {
+        const sceneUrl = item.sceneThumbnail || '';
+        const proxiedScene = sceneUrl ? `/api/image?url=${encodeURIComponent(sceneUrl)}` : '/static/style.css';
+        const proxiedPlate = item.file ? `/api/image?url=${encodeURIComponent(item.file)}` : '/static/style.css';
+        const confPct = Math.round(item.confidence * 100);
+        const cam = camName(item.cameraId);
+
+        return `
+          <div class="detection-card" onclick="showDetailModal(${idx})">
+            <div class="detection-img-side">
+              <img class="detection-scene-img" src="${proxiedScene}" onerror="this.src='/static/style.css'">
+              <span class="detection-confidence-tag">${confPct}%</span>
+            </div>
+            <div class="detection-face-side">
+              <div class="plate-avatar-wrap" style="width: 100px; height: 35px; box-shadow: none;">
+                <img class="plate-avatar" src="${proxiedPlate}" onerror="this.src='/static/style.css'">
+              </div>
+              <div class="detection-meta">
+                <span class="detection-time">${fmtTime(item.datetime)}</span>
+                <span class="detection-cam" title="ID: ${item.cameraId}">${cam}</span>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ── Zoom Modal Logic ──
+    function showDetailModal(index) {
+      if (!activeTarget || !activeTarget.history) return;
+      const sorted = [...activeTarget.history].sort((a, b) => new Date(b.datetime) - new Date(a.datetime));
+      const item = sorted[index];
+      if (!item) return;
+
+      selectedDetection = item;
+
+      const modal = document.getElementById('detail-modal');
+      const modalTime = document.getElementById('modal-meta-time');
+      const modalCam = document.getElementById('modal-meta-cam');
+      const modalConf = document.getElementById('modal-meta-conf');
+      const modalSceneImg = document.getElementById('modal-scene-img');
+
+      modalTime.textContent = fmtTime(item.datetime);
+      modalCam.textContent = camName(item.cameraId);
+      modalConf.textContent = `${Math.round(item.confidence * 100)}%`;
+
+      const sceneUrl = item.sceneThumbnail ? item.sceneThumbnail.replace(/_thumbnail\.jpg$/, '.jpg') : '';
+      const proxiedScene = sceneUrl ? `/api/image?url=${encodeURIComponent(sceneUrl)}` : '';
+      
+      modalSceneImg.src = proxiedScene;
+      
+      updateLensSettingUI();
+      updateBoxSettingUI();
+
+      modal.classList.add('show');
+    }
+
+    function hideDetailModal() {
+      const modal = document.getElementById('detail-modal');
+      modal.classList.remove('show');
+      selectedDetection = null;
+      hideLens();
+    }
+
+    function closeDetailModal(e) {
+      if (e.target.id === 'detail-modal') {
+        hideDetailModal();
+      }
+    }
+
+    function toggleLensSetting() {
+      isLensEnabled = !isLensEnabled;
+      updateLensSettingUI();
+    }
+
+    function updateLensSettingUI() {
+      const btn = document.getElementById('modal-toggle-lens-btn');
+      btn.classList.toggle('active', isLensEnabled);
+      btn.textContent = `Lens: ${isLensEnabled ? 'On' : 'Off'}`;
+      hideLens();
+    }
+
+    function toggleBoxSetting() {
+      isBoxEnabled = !isBoxEnabled;
+      updateBoxSettingUI();
+    }
+
+    function updateBoxSettingUI() {
+      const btn = document.getElementById('modal-toggle-box-btn');
+      btn.classList.toggle('active', isBoxEnabled);
+      btn.textContent = `Box: ${isBoxEnabled ? 'On' : 'Off'}`;
+      
+      const box = document.getElementById('modal-bounding-box');
+      if (box) {
+        box.style.display = isBoxEnabled ? 'block' : 'none';
+      }
+    }
+
+    function initBoundingBox() {
+      const img = document.getElementById('modal-scene-img');
+      const box = document.getElementById('modal-bounding-box');
+      if (!img || !box || !selectedDetection) return;
+
+      imageNaturalWidth = img.naturalWidth || 1920;
+      imageNaturalHeight = img.naturalHeight || 1080;
+
+      drawBoundingBox();
+    }
+
+    function drawBoundingBox() {
+      const img = document.getElementById('modal-scene-img');
+      const box = document.getElementById('modal-bounding-box');
+      if (!img || !box || !selectedDetection) return;
+
+      const posStr = selectedDetection.position || "0,0,0,0";
+      const parts = posStr.split(',').map(Number);
+      if (parts.length < 4) return;
+
+      const [x, y, w, h] = parts;
+      
+      const clientWidth = img.clientWidth;
+      const clientHeight = img.clientHeight;
+      
+      const rx = clientWidth / imageNaturalWidth;
+      const ry = clientHeight / imageNaturalHeight;
+
+      box.style.left = `${x * rx}px`;
+      box.style.top = `${y * ry}px`;
+      box.style.width = `${w * rx}px`;
+      box.style.height = `${h * ry}px`;
+    }
+
+    window.addEventListener('resize', () => {
+      if (selectedDetection) {
+        drawBoundingBox();
+      }
+    });
+
+    // ── Zoom Lens / Magnifying Glass Logic ──
+    function handleLensMove(e) {
+      if (!isLensEnabled || !selectedDetection) return;
+
+      const img = document.getElementById('modal-scene-img');
+      const lens = document.getElementById('modal-zoom-lens');
+      const container = document.getElementById('modal-image-wrap');
+
+      if (!img || !lens || !container) return;
+
+      const rect = img.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (x < 0 || x > rect.width || y < 0 || y > rect.height) {
+        hideLens();
+        return;
+      }
+
+      lens.style.display = 'block';
+
+      const lensWidth = lens.offsetWidth;
+      const lensHeight = lens.offsetHeight;
+
+      const px = x - lensWidth / 2;
+      const py = y - lensHeight / 2;
+
+      lens.style.left = `${px}px`;
+      lens.style.top = `${py}px`;
+
+      const sceneUrl = selectedDetection.sceneThumbnail ? selectedDetection.sceneThumbnail.replace(/_thumbnail\.jpg$/, '.jpg') : '';
+      const proxiedScene = sceneUrl ? `/api/image?url=${encodeURIComponent(sceneUrl)}` : '';
+      lens.style.backgroundImage = `url('${proxiedScene}')`;
+
+      const naturalX = (x / rect.width) * imageNaturalWidth;
+      const naturalY = (y / rect.height) * imageNaturalHeight;
+
+      const rx = -naturalX + lensWidth / 2;
+      const ry = -naturalY + lensHeight / 2;
+
+      lens.style.backgroundPosition = `${rx}px ${ry}px`;
+      lens.style.backgroundSize = `${imageNaturalWidth}px ${imageNaturalHeight}px`;
+    }
+
+    function showLens() {
+      if (isLensEnabled) {
+        document.getElementById('modal-zoom-lens').style.display = 'block';
+      }
+    }
+
+    function hideLens() {
+      const lens = document.getElementById('modal-zoom-lens');
+      if (lens) {
+        lens.style.display = 'none';
+      }
+    }
+
+    function downloadModalImage() {
+      if (!selectedDetection) return;
+      const sceneUrl = selectedDetection.sceneThumbnail ? selectedDetection.sceneThumbnail.replace(/_thumbnail\.jpg$/, '.jpg') : '';
+      const proxiedScene = sceneUrl ? `/api/image?url=${encodeURIComponent(sceneUrl)}` : '';
+      if (!proxiedScene) return;
+      
+      const a = document.createElement('a');
+      a.href = proxiedScene;
+      a.download = `scene_${selectedDetection.licensePlateId || Date.now()}.jpg`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+    }
+
+    function showToast(msg, type = 'success') {
+      const toast = document.getElementById('toast');
+      if (!toast) return;
+      toast.className = `show ${type}`;
+      toast.textContent = msg;
+      setTimeout(() => {
+        toast.className = '';
+      }, 3000);
+    }
+
+    // ── HTTP helpers ──
+    async function get(path) {
+      const r = await fetch(API + path);
+      if (!r.ok) throw new Error(await r.text());
+      return r.json();
+    }
+  </script>
+</body>
+</html>

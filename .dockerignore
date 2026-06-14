@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+
+# Runtime data — never bake config into the image
+config.json
+
+# OS / IDE artefacts
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Docker files (no need to include in build context)
+docker-compose.yml
+Dockerfile
+.dockerignore
