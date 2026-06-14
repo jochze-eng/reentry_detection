@@ -224,6 +224,31 @@ async def get_lpr_status():
     status["stats"]["unique_lpr_count"] = await db_manager.get_unique_lpr_count(lookback)
     return status
 
+@router.get("/monitor/chart")
+async def get_lpr_chart(
+    interval: str = Query(default="1h", pattern="^(5m|15m|30m|1h)$"),
+    lookback_hours: int = Query(default=None)
+):
+    cfg = await load_config()
+    if lookback_hours is None:
+        lookback_hours = cfg.job.lookback_hours if cfg else 24
+    
+    mapping = {
+        "5m": 5,
+        "15m": 15,
+        "30m": 30,
+        "1h": 60
+    }
+    interval_minutes = mapping.get(interval, 60)
+    
+    try:
+        data = await db_manager.get_lpr_chart_data(lookback_hours, interval_minutes)
+        return data
+    except Exception as e:
+        logger.error(f"Error fetching chart data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/monitor/logs")
 async def get_lpr_logs(limit: int = Query(default=50, ge=1, le=200)):
     return await db_manager.get_lpr_logs(limit=limit)
@@ -256,6 +281,31 @@ async def get_fr_status():
     lookback = cfg.fr.lookback_hours if cfg else 24
     status["stats"]["unique_fr_count"] = await db_manager.get_unique_fr_count(lookback)
     return status
+
+@router.get("/fr/chart")
+async def get_fr_chart(
+    interval: str = Query(default="1h", pattern="^(5m|15m|30m|1h)$"),
+    lookback_hours: int = Query(default=None)
+):
+    cfg = await load_config()
+    if lookback_hours is None:
+        lookback_hours = cfg.fr.lookback_hours if cfg else 24
+    
+    mapping = {
+        "5m": 5,
+        "15m": 15,
+        "30m": 30,
+        "1h": 60
+    }
+    interval_minutes = mapping.get(interval, 60)
+    
+    try:
+        data = await db_manager.get_fr_chart_data(lookback_hours, interval_minutes)
+        return data
+    except Exception as e:
+        logger.error(f"Error fetching FR chart data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/fr/logs")
 async def get_fr_logs(limit: int = Query(default=50, ge=1, le=200)):

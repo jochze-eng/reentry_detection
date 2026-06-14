@@ -165,4 +165,18 @@ def serve_settings():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8088, reload=False)
+    ssl_keyfile = "certs/server.key"
+    ssl_certfile = "certs/server.crt"
+    if os.path.exists(ssl_keyfile) and os.path.exists(ssl_certfile):
+        logger.info("SSL certificates found. Starting server in HTTPS mode...")
+        uvicorn.run(
+            "main:app",
+            host="0.0.0.0",
+            port=8088,
+            reload=False,
+            ssl_keyfile=ssl_keyfile,
+            ssl_certfile=ssl_certfile
+        )
+    else:
+        logger.info("SSL certificates not found. Starting server in HTTP mode...")
+        uvicorn.run("main:app", host="0.0.0.0", port=8088, reload=False)

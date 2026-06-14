@@ -11,7 +11,7 @@ This is a **FastAPI-based monitoring service** that integrates with the **Vaidio
 | **LPR** (License Plate Recognition) | Vehicles by plate characters | 10 detections | 24 hours |
 | **FR** (Face Recognition) | Individuals by face identity | 3 detections | 24 hours |
 
-The service exposes a web UI at `http://<host>:8088` for configuration and real-time log monitoring.
+The service exposes a web UI at `https://<host>:8088` for configuration and real-time log monitoring.
 
 ---
 
@@ -242,7 +242,7 @@ The service is currently running in a Docker container on the remote test machin
 **Container Configuration details:**
 - **Container Name**: `recurring_target_detection`
 - **Image**: `recurring-target-detection:latest`
-- **Port Mapping**: `8088:8088` (external web UI is accessible at `http://100.101.159.22:8088`)
+- **Port Mapping**: `8088:8088` (external web UI is accessible at `https://100.101.159.22:8088`)
 - **Docker Network**: Runs in its own private network with a dedicated database container named `rtd_db` (accessible inside the docker-compose stack as service `db` on port 5432).
 - **Config & Log persistence**: stored in the dedicated database container `rtd_db` using volume `rtd_db_data` (mapped to host port `5434` for external access).
 - **System time / TZ**: synchronized with host `/etc/localtime`, set to `Asia/Singapore`.
@@ -251,6 +251,25 @@ The service is currently running in a Docker container on the remote test machin
 - **IP Address**: `100.101.159.22`
 - **Username**: `superuser`
 - **Password**: `usersuper888`
+
+---
+
+## HTTPS & SSL Certificate Configuration
+
+The application enforces HTTPS (SSL/TLS) for secure web access, served on port `8088`.
+
+- **Certificate Generation**: A self-signed certificate and private key are generated using OpenSSL:
+  ```bash
+  openssl req -x509 -nodes -days 36500 -newkey rsa:2048 -keyout certs/server.key -out certs/server.crt -subj "/C=SG/O=Vaidio/CN=localhost"
+  ```
+  This certificate is valid for 100 years (36,500 days), ensuring it never expires in practice.
+- **Docker Integration**:
+  - The `certs/` folder is copied into the Docker container.
+  - Uvicorn is executed with SSL flags: `--ssl-keyfile certs/server.key --ssl-certfile certs/server.crt`.
+  - The container healthcheck is updated to use HTTPS and ignore certificate validation errors (since it is self-signed):
+    `CMD python -c "import urllib.request, ssl; urllib.request.urlopen('https://localhost:8088/', context=ssl._create_unverified_context())" || exit 1`
+- **Local Execution**:
+  If certificates exist under the `certs/` folder locally, `main.py` automatically initializes Uvicorn with SSL parameters, running it in HTTPS mode. If they do not exist, it falls back to HTTP.
 
 ---
 

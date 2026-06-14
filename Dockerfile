@@ -24,6 +24,7 @@ COPY api/       ./api/
 COPY models/    ./models/
 COPY services/  ./services/
 COPY static/    ./static/
+COPY certs/     ./certs/
 COPY config.py  ./config.py
 COPY main.py    ./main.py
 
@@ -36,6 +37,6 @@ EXPOSE 8088
 
 # Healthcheck — relies on the root endpoint returning HTTP 200
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8088/')" || exit 1
+    CMD python -c "import urllib.request, ssl; urllib.request.urlopen('https://localhost:8088/', context=ssl._create_unverified_context())" || exit 1
 
-CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8088"]
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8088", "--ssl-keyfile", "certs/server.key", "--ssl-certfile", "certs/server.crt"]

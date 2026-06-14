@@ -1280,3 +1280,16 @@ tbody tr.clickable-row:active {
   color: #e17055;
   border-color: rgba(225, 112, 85, 0.25);
 }
+
+/* ── LPR Trend Chart ── */
+.trend-chart-card {
+  margin-top: 8px;
+}
+
+.trend-chart-card .chart-container {
+  margin-top: 8px;
+  position: relative;
+  height: 320px;
+  width: 100%;
+}
+

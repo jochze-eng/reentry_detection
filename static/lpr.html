@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vaidio LPR Monitor - Dashboard</title>
   <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
   <div class="app-container">
@@ -101,6 +102,22 @@
                 <tr><td colspan="5" class="empty-log">No records yet</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- Unique Plates Trend Card -->
+        <div class="card trend-chart-card">
+          <div class="chart-header">
+            <span class="chart-title">Unique Plates Trend</span>
+            <div class="btn-group" id="chart-interval-group">
+              <button class="btn-pill" data-interval="5m" onclick="updateChartInterval('5m')">5 Mins</button>
+              <button class="btn-pill" data-interval="15m" onclick="updateChartInterval('15m')">15 Mins</button>
+              <button class="btn-pill" data-interval="30m" onclick="updateChartInterval('30m')">30 Mins</button>
+              <button class="btn-pill active" data-interval="1h" onclick="updateChartInterval('1h')">1 Hour</button>
+            </div>
+          </div>
+          <div class="chart-container" style="position: relative; height: 320px; width: 100%;">
+            <canvas id="unique-plates-chart"></canvas>
           </div>
         </div>
       </div>
@@ -219,9 +236,15 @@
     let imageNaturalWidth = 1920;
     let imageNaturalHeight = 1080;
 
+    // Trend chart variables
+    let trendChart = null;
+    let trendChartInterval = '1h';
+    let lastChartRefresh = 0;
+
     window.addEventListener('DOMContentLoaded', () => {
       refreshStatus();
       setInterval(refreshStatus, 3000);
+      refreshTrendChart();
     });
 
     // Resolve camera name with fallback
@@ -258,6 +281,13 @@
         updateStatusUI('lpr', lprStatus);
         updateStatusUI('fr',  frStatus);
         updateLPRLogs(lprLogs);
+
+        // Throttle trend chart refresh to once every 30 seconds
+        const now = Date.now();
+        if (now - lastChartRefresh >= 30000) {
+          lastChartRefresh = now;
+          refreshTrendChart();
+        }
       } catch (err) {
         console.error('Error refreshing status:', err);
       }
@@ -682,6 +712,141 @@
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+    }
+
+    // ── Trend Chart Logic ──
+    async function refreshTrendChart() {
+      try {
+        const data = await get(`/monitor/chart?interval=${trendChartInterval}`);
+        renderTrendChart(data);
+      } catch (err) {
+        console.error('Error refreshing trend chart:', err);
+      }
+    }
+
+    function renderTrendChart(data) {
+      const canvas = document.getElementById('unique-plates-chart');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Map and format labels and values
+      const labels = data.map(item => {
+        const d = new Date(item.time);
+        const hh = String(d.getHours()).padStart(2, '0');
+        const mi = String(d.getMinutes()).padStart(2, '0');
+        if (trendChartInterval === '1h') {
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          return `${mm}/${dd} ${hh}:${mi}`;
+        }
+        return `${hh}:${mi}`;
+      });
+      const counts = data.map(item => item.count);
+
+      if (trendChart) {
+        trendChart.data.labels = labels;
+        trendChart.data.datasets[0].data = counts;
+        trendChart.update('none'); // Update without animation for smooth refresh
+      } else {
+        // Create dynamic gradient fill
+        const gradient = ctx.createLinearGradient(0, 0, 0, 300);
+        gradient.addColorStop(0, 'rgba(99, 102, 241, 0.45)');
+        gradient.addColorStop(1, 'rgba(168, 85, 247, 0.0)');
+
+        trendChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels: labels,
+            datasets: [{
+              label: 'Unique Plates',
+              data: counts,
+              borderColor: '#6366f1',
+              borderWidth: 2,
+              backgroundColor: gradient,
+              fill: true,
+              tension: 0.3, // smooth curves
+              pointBackgroundColor: '#a855f7',
+              pointBorderColor: '#ffffff',
+              pointHoverBackgroundColor: '#ffffff',
+              pointHoverBorderColor: '#6366f1',
+              pointRadius: 2,
+              pointHoverRadius: 5
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: {
+                display: false
+              },
+              tooltip: {
+                mode: 'index',
+                intersect: false,
+                backgroundColor: '#0b0c15',
+                titleColor: '#f8fafc',
+                bodyColor: '#cbd5e1',
+                borderColor: 'rgba(255, 255, 255, 0.1)',
+                borderWidth: 1,
+                padding: 10,
+                displayColors: false,
+                callbacks: {
+                  label: function(context) {
+                    return `Unique Plates: ${context.parsed.y}`;
+                  }
+                }
+              }
+            },
+            scales: {
+              x: {
+                grid: {
+                  color: 'rgba(255, 255, 255, 0.04)',
+                  borderColor: 'rgba(255, 255, 255, 0.08)'
+                },
+                ticks: {
+                  color: '#94a3b8',
+                  font: {
+                    family: "'Inter', sans-serif",
+                    size: 10
+                  },
+                  maxTicksLimit: 12
+                }
+              },
+              y: {
+                grid: {
+                  color: 'rgba(255, 255, 255, 0.04)',
+                  borderColor: 'rgba(255, 255, 255, 0.08)'
+                },
+                ticks: {
+                  color: '#94a3b8',
+                  font: {
+                    family: "'Inter', sans-serif",
+                    size: 10
+                  },
+                  precision: 0
+                },
+                beginAtZero: true
+              }
+            }
+          }
+        });
+      }
+    }
+
+    function updateChartInterval(interval) {
+      trendChartInterval = interval;
+      const buttons = document.querySelectorAll('#chart-interval-group .btn-pill');
+      buttons.forEach(btn => {
+        if (btn.getAttribute('data-interval') === interval) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+      // Reset refresh timer to fire immediately
+      lastChartRefresh = Date.now();
+      refreshTrendChart();
     }
 
     function showToast(msg, type = 'success') {

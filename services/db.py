@@ -387,6 +387,32 @@ class DatabaseManager:
             """, lookback_hours)
             return row["count"] if row else 0
 
+    async def get_lpr_chart_data(self, lookback_hours: int, interval_minutes: int) -> list:
+        if not self.pool:
+            await self.connect()
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT 
+                    bin_start as time,
+                    COALESCE(COUNT(DISTINCT l.characters), 0)::int as count
+                FROM (
+                    SELECT generate_series(
+                        NOW() - ($1::int * INTERVAL '1 hour'), 
+                        NOW(), 
+                        $2::int * INTERVAL '1 minute'
+                    ) as bin_start
+                ) gs
+                LEFT JOIN lpr_logs l ON 
+                    l.detected_at >= gs.bin_start 
+                    AND l.detected_at < gs.bin_start + ($2::int * INTERVAL '1 minute')
+                GROUP BY bin_start
+                ORDER BY bin_start ASC;
+            """, lookback_hours, interval_minutes)
+            
+            return [{"time": r["time"].isoformat() if r["time"] else "", "count": r["count"]} for r in rows]
+
+
     # ── FR Log Persistence ──
     async def insert_fr_log(self, r: FRProcessedRecord):
         if not self.pool:
@@ -612,6 +638,32 @@ class DatabaseManager:
                 WHERE detected_at >= NOW() - ($1 * INTERVAL '1 hour')
             """, lookback_hours)
             return row["count"] if row else 0
+
+    async def get_fr_chart_data(self, lookback_hours: int, interval_minutes: int) -> list:
+        if not self.pool:
+            await self.connect()
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("""
+                SELECT 
+                    bin_start as time,
+                    COALESCE(COUNT(DISTINCT f.face_target_id), 0)::int as count
+                FROM (
+                    SELECT generate_series(
+                        NOW() - ($1::int * INTERVAL '1 hour'), 
+                        NOW(), 
+                        $2::int * INTERVAL '1 minute'
+                    ) as bin_start
+                ) gs
+                LEFT JOIN fr_logs f ON 
+                    f.detected_at >= gs.bin_start 
+                    AND f.detected_at < gs.bin_start + ($2::int * INTERVAL '1 minute')
+                GROUP BY bin_start
+                ORDER BY bin_start ASC;
+            """, lookback_hours, interval_minutes)
+            
+            return [{"time": r["time"].isoformat() if r["time"] else "", "count": r["count"]} for r in rows]
+
 
     async def upsert_cameras(self, cameras: list[dict]):
         if not self.pool:
