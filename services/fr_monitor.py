@@ -147,6 +147,7 @@ class FRMonitor:
     #  Single Record Processing
     # ------------------------------------------------------------------ #
     async def _process_record(self, record: FRRecord, cfg: AppConfig) -> FRProcessedRecord:
+        descriptor = None
         try:
             # Step 1: get descriptor from face image
             descriptor = await self._client.get_face_descriptor(record.file)
@@ -182,6 +183,7 @@ class FRMonitor:
                         error=str(e),
                         position=record.position,
                         confidence=record.confidence,
+                        descriptor=descriptor,
                     )
 
             return FRProcessedRecord(
@@ -196,6 +198,7 @@ class FRMonitor:
                 event_created=event_created,
                 position=record.position,
                 confidence=record.confidence,
+                descriptor=descriptor,
             )
 
         except Exception as e:
@@ -213,6 +216,7 @@ class FRMonitor:
                 error=str(e),
                 position=record.position,
                 confidence=record.confidence,
+                descriptor=descriptor,
             )
 
     # ------------------------------------------------------------------ #

@@ -127,6 +127,10 @@ class DatabaseManager:
             await conn.execute("""
                 ALTER TABLE fr_logs ADD COLUMN IF NOT EXISTS confidence DOUBLE PRECISION DEFAULT 0.0
             """)
+            # Add descriptor column if it doesn't exist yet
+            await conn.execute("""
+                ALTER TABLE fr_logs ADD COLUMN IF NOT EXISTS descriptor TEXT
+            """)
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_target ON fr_logs (face_target_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_detected ON fr_logs (detected_at DESC)")
 
@@ -374,8 +378,8 @@ class DatabaseManager:
             await conn.execute("""
                 INSERT INTO fr_logs (
                     face_match_id, face_target_id, face_target_name, face_file, detected_at, camera_id,
-                    history_count, triggered, event_created, error_msg, position, confidence
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                    history_count, triggered, event_created, error_msg, position, confidence, descriptor
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
                 ON CONFLICT (face_match_id) DO NOTHING
             """,
             r.faceMatchId,
@@ -389,8 +393,27 @@ class DatabaseManager:
             r.event_created,
             r.error,
             r.position,
-            r.confidence
+            r.confidence,
+            r.descriptor
             )
+
+    async def get_fr_descriptor_by_file(self, face_file: str) -> str | None:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT descriptor FROM fr_logs WHERE face_file = $1 AND descriptor IS NOT NULL LIMIT 1
+            """, face_file)
+            return row["descriptor"] if row else None
+
+    async def update_fr_descriptor(self, face_file: str, descriptor: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE fr_logs SET descriptor = $1 WHERE face_file = $2
+            """, descriptor, face_file)
+
 
     async def get_fr_logs(self, limit: int = 50) -> list[dict]:
         if not self.pool:

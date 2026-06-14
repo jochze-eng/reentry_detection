@@ -289,7 +289,18 @@ async def get_fr_target_history(
     if face_file:
         try:
             client = VaidioClient(cfg)
-            descriptor = await client.get_face_descriptor(face_file)
+            
+            # Check local DB descriptor cache first
+            descriptor = await db_manager.get_fr_descriptor_by_file(face_file)
+            if not descriptor:
+                logger.info(f"Descriptor cache MISS for {face_file}. Extracting from Vaidio...")
+                descriptor = await client.get_face_descriptor(face_file)
+                if descriptor:
+                    # Save to DB cache for future loads
+                    await db_manager.update_fr_descriptor(face_file, descriptor)
+            else:
+                logger.info(f"Descriptor cache HIT for {face_file}")
+
             if descriptor:
                 records = await client.search_face_history(
                     descriptor,

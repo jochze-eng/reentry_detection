@@ -27,3 +27,5 @@ class FRProcessedRecord(BaseModel):
     error: Optional[str] = None
     position: str = "0,0,0,0"   # bounding box "x,y,w,h" from faceKey.position
     confidence: float = 0.0      # match confidence from faceKey.confidence
+    descriptor: Optional[str] = None
+
