@@ -126,7 +126,14 @@ class VaidioClient:
         self, start: datetime, end: datetime
     ) -> list[LPRRecord]:
         data = await self._get_lpr_page(start=start, end=end, page=0)
-        return [LPRRecord(**r) for r in data.get("content", [])]
+        records = []
+        for r in data.get("content", []):
+            target = r.get("target")
+            cat_name = target.get("category", {}).get("name") if (target and target.get("category")) else None
+            rec_dict = dict(r)
+            rec_dict["licensePlateTargetCategory"] = cat_name
+            records.append(LPRRecord(**rec_dict))
+        return records
 
     async def get_plate_history_count(self, characters: str, anchor_dt: datetime = None) -> int:
         if anchor_dt is not None:
@@ -207,6 +214,19 @@ class VaidioClient:
         async with self._client(timeout=10) as client:
             r = await client.get(
                 f"{self.base_url}/ainvr/api/face/categories",
+                headers=self.headers,
+            )
+            r.raise_for_status()
+            data = r.json()
+        return [item["name"] for item in data if item.get("name")]
+
+    # ------------------------------------------------------------------ #
+    #  LPR: fetch all license plate category names from /ainvr/api/lpr/categories
+    # ------------------------------------------------------------------ #
+    async def get_lpr_category_names(self) -> list[str]:
+        async with self._client(timeout=10) as client:
+            r = await client.get(
+                f"{self.base_url}/ainvr/api/lpr/categories",
                 headers=self.headers,
             )
             r.raise_for_status()
@@ -326,6 +346,7 @@ class VaidioClient:
                 try:
                     fk = item.get("faceKey") or {}
                     ft = item.get("faceTarget") or {}
+                    cat_name = ft.get("category", {}).get("name") if ft.get("category") else None
                     records.append(FRRecord(
                         faceMatchId=item["faceMatchId"],
                         datetime=item["datetime"],
@@ -333,6 +354,7 @@ class VaidioClient:
                         sceneId=fk.get("sceneId", 0),
                         faceTargetId=ft.get("faceTargetId", "unknown"),
                         faceTargetName=ft.get("name", "unknown"),
+                        faceTargetCategory=cat_name,
                         file=fk.get("file", ""),
                         position=fk.get("position", "0,0,0,0"),
                         confidence=fk.get("confidence", 0.0),

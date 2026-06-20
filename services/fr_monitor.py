@@ -172,6 +172,13 @@ class FRMonitor:
         descriptor = None
         history_records = []
         try:
+            # Check if category is excluded
+            is_excluded = False
+            if record.faceTargetCategory and cfg.fr.exclude_categories:
+                if record.faceTargetCategory in cfg.fr.exclude_categories:
+                    is_excluded = True
+                    logger.info(f"[FR:{record.faceTargetName}] Excluded from triggering due to category: {record.faceTargetCategory}")
+
             # Step 1: get descriptor from face image
             descriptor = await self._client.get_face_descriptor(record.file)
             if not descriptor:
@@ -191,28 +198,31 @@ class FRMonitor:
             event_created = False
 
             if count > cfg.fr.threshold:
-                logger.warning(f"[FR:{record.faceTargetName}] TRIGGERED — count={count} > threshold={cfg.fr.threshold}")
-                try:
-                    event_created = await self._client.create_fr_abnormal_event(record)
-                    triggered = True
-                    self.stats["total_triggered"] += 1
-                except Exception as e:
-                    logger.error(f"[FR:{record.faceTargetName}] Failed to create abnormal event: {e}")
-                    return FRProcessedRecord(
-                        faceMatchId=record.faceMatchId,
-                        faceTargetId=record.faceTargetId,
-                        faceTargetName=record.faceTargetName,
-                        face_file=record.file,
-                        detected_at=record.datetime,
-                        cameraId=record.cameraId,
-                        history_count=count,
-                        triggered=True,
-                        event_created=False,
-                        error=str(e),
-                        position=record.position,
-                        confidence=record.confidence,
-                        descriptor=descriptor,
-                    ), history_records
+                if is_excluded:
+                    logger.info(f"[FR:{record.faceTargetName}] Threshold exceeded ({count} > {cfg.fr.threshold}), but category '{record.faceTargetCategory}' is excluded from triggering.")
+                else:
+                    logger.warning(f"[FR:{record.faceTargetName}] TRIGGERED — count={count} > threshold={cfg.fr.threshold}")
+                    try:
+                        event_created = await self._client.create_fr_abnormal_event(record)
+                        triggered = True
+                        self.stats["total_triggered"] += 1
+                    except Exception as e:
+                        logger.error(f"[FR:{record.faceTargetName}] Failed to create abnormal event: {e}")
+                        return FRProcessedRecord(
+                            faceMatchId=record.faceMatchId,
+                            faceTargetId=record.faceTargetId,
+                            faceTargetName=record.faceTargetName,
+                            face_file=record.file,
+                            detected_at=record.datetime,
+                            cameraId=record.cameraId,
+                            history_count=count,
+                            triggered=True,
+                            event_created=False,
+                            error=str(e),
+                            position=record.position,
+                            confidence=record.confidence,
+                            descriptor=descriptor,
+                        ), history_records
 
             return FRProcessedRecord(
                 faceMatchId=record.faceMatchId,

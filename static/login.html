@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vaidio RTD - Login</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      background: radial-gradient(circle at 50% 30%, rgba(99, 102, 241, 0.15) 0%, rgba(7, 8, 14, 0) 60%), var(--bg-primary);
+      overflow: auto;
+    }
+
+    .login-container {
+      width: 100%;
+      max-width: 420px;
+      padding: 20px;
+    }
+
+    .login-card {
+      background: rgba(18, 20, 32, 0.45);
+      border: 1px solid var(--border-color);
+      border-radius: 24px;
+      padding: 40px 32px;
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 100px rgba(99, 102, 241, 0.05);
+      transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    .login-card:hover {
+      border-color: rgba(99, 102, 241, 0.25);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5), 0 0 100px rgba(99, 102, 241, 0.1);
+    }
+
+    .login-logo {
+      font-size: 28px;
+      font-weight: 800;
+      text-align: center;
+      margin-bottom: 8px;
+      color: var(--text-primary);
+      letter-spacing: -0.03em;
+    }
+
+    .login-logo span {
+      background: var(--accent-gradient);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .login-subtitle {
+      text-align: center;
+      font-size: 13px;
+      color: var(--text-secondary);
+      margin-bottom: 36px;
+      font-weight: 400;
+    }
+
+    .input-group {
+      margin-bottom: 24px;
+      position: relative;
+    }
+
+    .input-group label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-secondary);
+      margin-bottom: 8px;
+    }
+
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    .input-wrapper input {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 14px 16px;
+      color: var(--text-primary);
+      font-size: 14px;
+      font-family: var(--font-family);
+      transition: all 0.25s ease;
+      outline: none;
+    }
+
+    .input-wrapper input:focus {
+      border-color: var(--accent-primary);
+      background: rgba(99, 102, 241, 0.03);
+      box-shadow: 0 0 12px rgba(99, 102, 241, 0.2);
+    }
+
+    .password-toggle {
+      position: absolute;
+      right: 14px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: none;
+      border: none;
+      padding: 0;
+      outline: none;
+      transition: color 0.2s ease;
+    }
+
+    .password-toggle:hover {
+      color: var(--text-primary);
+    }
+
+    .password-toggle svg {
+      width: 18px;
+      height: 18px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+    }
+
+    .btn-login {
+      width: 100%;
+      background: var(--accent-gradient);
+      color: #ffffff;
+      border: none;
+      border-radius: 12px;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 600;
+      font-family: var(--font-family);
+      cursor: pointer;
+      box-shadow: 0 4px 12px var(--accent-glow);
+      transition: all 0.25s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .btn-login:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45), 0 0 30px rgba(168, 85, 247, 0.3);
+    }
+
+    .btn-login:active {
+      transform: translateY(0);
+    }
+
+    .error-banner {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      border-radius: 12px;
+      padding: 12px 16px;
+      color: var(--color-error);
+      font-size: 13px;
+      margin-bottom: 24px;
+      display: none;
+      align-items: center;
+      gap: 10px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(-5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Card shake animation on error */
+    .shake {
+      animation: shake 0.4s ease-in-out;
+    }
+
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%, 60% { transform: translateX(-6px); }
+      40%, 80% { transform: translateX(6px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-card" id="login-card">
+      <div class="login-logo">
+        Vaidio <span>RTD</span>
+      </div>
+      <div class="login-subtitle">
+        Recurring Target Detection Portal
+      </div>
+
+      <div class="error-banner" id="error-banner">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        <span id="error-msg">Invalid credentials</span>
+      </div>
+
+      <form id="login-form" onsubmit="handleLogin(event)">
+        <div class="input-group">
+          <label for="username">Username</label>
+          <div class="input-wrapper">
+            <input type="text" id="username" autocomplete="username" required placeholder="Enter username" />
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="password">Password</label>
+          <div class="input-wrapper">
+            <input type="password" id="password" autocomplete="current-password" required placeholder="Enter password" />
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility()">
+              <svg id="eye-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-login">
+          <span>Login</span>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script>
+    function togglePasswordVisibility() {
+      const passwordInput = document.getElementById('password');
+      const eyeIcon = document.getElementById('eye-icon');
+      if (passwordInput.type === 'password') {
+        passwordInput.type = 'text';
+        eyeIcon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
+      } else {
+        passwordInput.type = 'password';
+        eyeIcon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>';
+      }
+    }
+
+    async function handleLogin(event) {
+      event.preventDefault();
+      const errorBanner = document.getElementById('error-banner');
+      const errorMsg = document.getElementById('error-msg');
+      const loginCard = document.getElementById('login-card');
+      
+      errorBanner.style.display = 'none';
+      loginCard.classList.remove('shake');
+
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+
+      try {
+        const response = await fetch('/api/login', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ username, password })
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || 'Failed to authenticate');
+        }
+
+        const data = await response.json();
+        // Redirect to dashboard
+        window.location.href = '/';
+      } catch (err) {
+        // Trigger card shake
+        void loginCard.offsetWidth; // trigger reflow
+        loginCard.classList.add('shake');
+        
+        errorMsg.textContent = err.message;
+        errorBanner.style.display = 'flex';
+      }
+    }
+  </script>
+</body>
+</html>

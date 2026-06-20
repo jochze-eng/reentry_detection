@@ -273,6 +273,40 @@ The application enforces HTTPS (SSL/TLS) for secure web access, served on port `
 
 ---
 
+## User Management & Role-Based Access Control (RBAC)
+
+The application implements database-backed user authentication and authorization using cookie-based sessions (`session_token`).
+
+### User Groups & Roles
+Two roles are supported to enforce access control:
+1.  **Administrator**: Full access to all monitoring dashboards, target history, and settings configuration. Administrators can manage all user accounts (create users, reset passwords, delete users) via the User Management panel.
+2.  **Operator**: Restricted access. Operators can view the LPR and FR dashboards and logs, but have no access to the Settings configuration or the User Management panel.
+
+### Authentication Database Tables
+
+#### 1. `users` Table
+Stores registered accounts and their hashed credentials.
+*   `id` (serial, Primary Key)
+*   `username` (text, unique index)
+*   `password_hash` (text) — salted PBKDF2-SHA256 password hash
+*   `role` (text) — constraint: `role IN ('Administrator', 'Operator')`
+
+#### 2. `user_sessions` Table
+Persists active user sessions for stateful authorization.
+*   `session_token` (text, Primary Key) — random 32-byte hex token
+*   `username` (text)
+*   `role` (text)
+*   `expires_at` (timestamp with time zone)
+
+### Security Enforcement
+*   **Frontend**: Sidebars dynamically hide administrative links (`/settings` and `/users`) from users with the `Operator` role. AJAX requests automatically redirect to `/login` if a `401 Unauthorized` response is received.
+*   **Backend Page Routes**: Router intercepts page requests to `/settings` and `/users` and redirects unauthorized users.
+*   **Backend API Endpoints**: Endpoints are wrapped in FastAPI dependency injection:
+    *   `Depends(get_current_user)` checks if a request includes a valid session cookie.
+    *   `Depends(require_admin)` guarantees that only users in the `Administrator` group can call config-related and user-administration APIs.
+
+---
+
 ## Key Implementation Notes
 
 - **SSL verification disabled** (`verify=False` in `vaidio_client.py:20`) to support self-signed Vaidio certificates.

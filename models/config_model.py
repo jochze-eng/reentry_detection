@@ -11,6 +11,7 @@ class JobConfig(BaseModel):
     lookback_hours: int = Field(24, ge=1)
     threshold: int = Field(10, ge=1)
     camera_ids: list[int] = Field(default_factory=list)
+    exclude_categories: list[str] = Field(default_factory=list)
 
 class FRConfig(BaseModel):
     enabled: bool = False
@@ -18,6 +19,7 @@ class FRConfig(BaseModel):
     lookback_hours: int = Field(24, ge=1)
     threshold: int = Field(3, ge=1)
     camera_ids: list[int] = Field(default_factory=list)
+    exclude_categories: list[str] = Field(default_factory=list)
 
 class AppConfig(BaseModel):
     vaidio: VaidioConfig

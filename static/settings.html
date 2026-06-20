@@ -26,10 +26,22 @@
             FR Monitor
           </a>
         </li>
-        <li class="sidebar-item active">
+        <li class="sidebar-item" id="nav-users" style="display: none;">
+          <a href="/users">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            User Management
+          </a>
+        </li>
+        <li class="sidebar-item active" id="nav-settings">
           <a href="/settings">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             Settings
+          </a>
+        </li>
+        <li class="sidebar-item" style="margin-top: auto;">
+          <a href="#" onclick="logout(event)">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Logout
           </a>
         </li>
       </nav>
@@ -115,6 +127,13 @@
               <div class="camera-empty-state">Loading cameras...</div>
             </div>
           </div>
+          <!-- LPR Target List Exclusions -->
+          <div class="camera-selection-container">
+            <label>Excluded LPR Target Lists (Results in selected lists won't trigger)</label>
+            <div class="camera-list" id="lpr_exclude_list">
+              <div class="camera-empty-state">Loading target lists...</div>
+            </div>
+          </div>
         </div>
 
         <!-- FR Card -->
@@ -150,6 +169,13 @@
               <div class="camera-empty-state">Loading cameras...</div>
             </div>
           </div>
+          <!-- FR Target List Exclusions -->
+          <div class="camera-selection-container">
+            <label>Excluded FR Target Lists (Results in selected lists won't trigger)</label>
+            <div class="camera-list" id="fr_exclude_list">
+              <div class="camera-empty-state">Loading target lists...</div>
+            </div>
+          </div>
         </div>
 
         <!-- Image Cache Card -->
@@ -182,10 +208,28 @@
 
     // Initialize Page
     window.addEventListener('DOMContentLoaded', () => {
-      loadConfig();
-      refreshStatus();
-      setInterval(refreshStatus, 3000);
+      checkUser().then(() => {
+        loadConfig();
+        refreshStatus();
+        setInterval(refreshStatus, 3000);
+      });
     });
+
+    async function checkUser() {
+      try {
+        const user = await get('/user/me');
+        if (user.role !== 'Administrator') {
+          window.location.href = '/';
+        } else {
+          const usersEl = document.getElementById('nav-users');
+          if (usersEl) {
+            usersEl.style.display = 'block';
+          }
+        }
+      } catch (err) {
+        window.location.href = '/login';
+      }
+    }
 
     // ── Status refresh (Sidebar only) ──
     async function refreshStatus() {
@@ -242,6 +286,8 @@
         
         // Fetch and load cameras
         await loadCameras(d.job?.camera_ids || [], d.fr?.camera_ids || []);
+        // Fetch and load target lists exclusions
+        await loadTargetLists(d.job?.exclude_categories || [], d.fr?.exclude_categories || []);
       } catch (err) {
         toast('Failed to load configuration: ' + err.message, 'error');
       }
@@ -289,6 +335,45 @@
       });
     }
 
+    async function loadTargetLists(selectedLprCats, selectedFrCats) {
+      const lprExcludeListEl = document.getElementById('lpr_exclude_list');
+      const frExcludeListEl = document.getElementById('fr_exclude_list');
+      
+      try {
+        const [lprCats, frCats] = await Promise.all([
+          get('/categories/lpr'),
+          get('/categories/fr')
+        ]);
+        
+        renderTargetList(lprExcludeListEl, lprCats || [], selectedLprCats, 'lpr_exclude');
+        renderTargetList(frExcludeListEl, frCats || [], selectedFrCats, 'fr_exclude');
+      } catch (err) {
+        lprExcludeListEl.innerHTML = `<div class="camera-empty-state" style="color: var(--color-error)">Failed to load target lists: ${err.message}</div>`;
+        frExcludeListEl.innerHTML = `<div class="camera-empty-state" style="color: var(--color-error)">Failed to load target lists: ${err.message}</div>`;
+      }
+    }
+
+    function renderTargetList(containerEl, categories, selectedCats, inputPrefix) {
+      if (!containerEl) return;
+      if (categories.length === 0) {
+        containerEl.innerHTML = '<div class="camera-empty-state">No target lists found on NVR</div>';
+        return;
+      }
+      
+      containerEl.innerHTML = '';
+      categories.forEach(cat => {
+        const isChecked = selectedCats.includes(cat);
+        const label = document.createElement('label');
+        label.className = 'camera-item';
+        
+        label.innerHTML = `
+          <input type="checkbox" name="${inputPrefix}" value="${cat}" ${isChecked ? 'checked' : ''} />
+          <span class="camera-name">${cat}</span>
+        `;
+        containerEl.appendChild(label);
+      });
+    }
+
     async function saveSettings() {
       const base_url              = document.getElementById('base_url').value.trim();
       const api_key               = document.getElementById('api_key').value.trim();
@@ -315,10 +400,14 @@
       const lpr_camera_ids = Array.from(document.querySelectorAll('input[name="lpr_cam"]:checked')).map(el => parseInt(el.value));
       const fr_camera_ids = Array.from(document.querySelectorAll('input[name="fr_cam"]:checked')).map(el => parseInt(el.value));
 
+      // Collect selected exclusions
+      const lpr_exclude_cats = Array.from(document.querySelectorAll('input[name="lpr_exclude"]:checked')).map(el => el.value);
+      const fr_exclude_cats = Array.from(document.querySelectorAll('input[name="fr_exclude"]:checked')).map(el => el.value);
+
       const body = {
         vaidio: { base_url, api_key },
-        job: { enabled: lpr_enabled, poll_interval_seconds, page_size: 100, lookback_hours, threshold, camera_ids: lpr_camera_ids },
-        fr:  { enabled: fr_enabled,  poll_interval_seconds: fr_poll, lookback_hours: fr_lookback_hours, threshold: fr_threshold, camera_ids: fr_camera_ids },
+        job: { enabled: lpr_enabled, poll_interval_seconds, page_size: 100, lookback_hours, threshold, camera_ids: lpr_camera_ids, exclude_categories: lpr_exclude_cats },
+        fr:  { enabled: fr_enabled,  poll_interval_seconds: fr_poll, lookback_hours: fr_lookback_hours, threshold: fr_threshold, camera_ids: fr_camera_ids, exclude_categories: fr_exclude_cats },
         image_cache_hours: image_cache_hours
       };
       
@@ -354,6 +443,10 @@
     // ── HTTP helpers ──
     async function get(path) {
       const r = await fetch(API + path);
+      if (r.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
       if (!r.ok) {
         const msg = await r.json().catch(() => ({ detail: r.statusText }));
         throw new Error(msg.detail || r.statusText);
@@ -367,11 +460,26 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
+      if (r.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
       if (!r.ok) {
         const msg = await r.json().catch(() => ({ detail: r.statusText }));
         throw new Error(msg.detail || r.statusText);
       }
       return r.json();
+    }
+
+    async function logout(e) {
+      if (e) e.preventDefault();
+      try {
+        await post('/logout', {});
+        window.location.href = '/login';
+      } catch (err) {
+        console.error('Logout failed:', err);
+        window.location.href = '/login';
+      }
     }
 
     // ── Toast ──

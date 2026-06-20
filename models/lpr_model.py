@@ -18,6 +18,7 @@ class LPRRecord(BaseModel):
     type: Optional[str] = None
     make: Optional[str] = None
     state: Optional[str] = None
+    licensePlateTargetCategory: Optional[str] = None
 
 class ProcessedRecord(BaseModel):
     licensePlateId: int

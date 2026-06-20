@@ -7,7 +7,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from datetime import datetime, timezone
 from api.routes import router
 from services.lpr_monitor import lpr_monitor
 from services.fr_monitor import fr_monitor
@@ -151,17 +152,59 @@ app.include_router(router, prefix="/api")
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+async def get_session_user(request: Request) -> dict | None:
+    token = request.cookies.get("session_token")
+    if not token:
+        return None
+    session = await db_manager.get_session(token)
+    if not session:
+        return None
+    expires = session["expires_at"]
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < datetime.now(timezone.utc):
+        await db_manager.delete_session(token)
+        return None
+    return session
+
 @app.get("/")
-def serve_lpr():
+async def serve_lpr(request: Request):
+    user = await get_session_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
     return FileResponse("static/lpr.html")
 
 @app.get("/fr")
-def serve_fr():
+async def serve_fr(request: Request):
+    user = await get_session_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
     return FileResponse("static/fr.html")
 
 @app.get("/settings")
-def serve_settings():
+async def serve_settings(request: Request):
+    user = await get_session_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    if user["role"] != "Administrator":
+        return RedirectResponse(url="/")
     return FileResponse("static/settings.html")
+
+@app.get("/users")
+async def serve_users(request: Request):
+    user = await get_session_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    if user["role"] != "Administrator":
+        return RedirectResponse(url="/")
+    return FileResponse("static/users.html")
+
+@app.get("/login")
+async def serve_login(request: Request):
+    user = await get_session_user(request)
+    if user:
+        return RedirectResponse(url="/")
+    return FileResponse("static/login.html")
 
 if __name__ == "__main__":
     import uvicorn

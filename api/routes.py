@@ -1,19 +1,150 @@
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
-from fastapi.responses import Response
+import asyncio
+import secrets
+from datetime import datetime, timezone, timedelta
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends, Request, Response
+from pydantic import BaseModel
 from models.config_model import AppConfig
 from services.lpr_monitor import lpr_monitor
 from services.fr_monitor import fr_monitor
 from services.vaidio_client import VaidioClient
-from services.db import db_manager
+from services.db import db_manager, verify_password, hash_password
 from config import load_config, save_config
 import httpx
 import logging
 import time
-from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# ------------------------------------------------------------------ #
+#  Authentication & Authorization Dependencies
+# ------------------------------------------------------------------ #
+
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("session_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    session = await db_manager.get_session(token)
+    if not session:
+        raise HTTPException(status_code=401, detail="Session invalid or expired")
+    
+    expires = session["expires_at"]
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    if expires < datetime.now(timezone.utc):
+        await db_manager.delete_session(token)
+        raise HTTPException(status_code=401, detail="Session expired")
+    return session
+
+async def require_admin(user: dict = Depends(get_current_user)) -> dict:
+    if user["role"] != "Administrator":
+        raise HTTPException(status_code=403, detail="Administrator privilege required")
+    return user
+
+# ------------------------------------------------------------------ #
+#  Authentication Endpoints
+# ------------------------------------------------------------------ #
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+@router.post("/login")
+async def api_login(req: LoginRequest, request: Request, response: Response):
+    user = await db_manager.get_user_by_username(req.username)
+    if not user or not verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Invalid username or password")
+    
+    token = secrets.token_hex(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=1)
+    
+    await db_manager.create_session(token, user["username"], user["role"], expires_at)
+    
+    secure = request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        httponly=True,
+        secure=secure,
+        samesite="lax",
+        max_age=86400,
+        path="/"
+    )
+    return {"status": "success", "username": user["username"], "role": user["role"]}
+
+@router.post("/logout")
+async def api_logout(request: Request, response: Response):
+    token = request.cookies.get("session_token")
+    if token:
+        await db_manager.delete_session(token)
+    response.delete_cookie(key="session_token", path="/")
+    return {"status": "success"}
+
+@router.get("/user/me")
+async def get_user_me(user: dict = Depends(get_current_user)):
+    return {"username": user["username"], "role": user["role"]}
+
+# ------------------------------------------------------------------ #
+#  User Management API Endpoints (Admin Only)
+# ------------------------------------------------------------------ #
+
+class UserCreateRequest(BaseModel):
+    username: str
+    password: str
+    role: str
+
+class PasswordResetRequest(BaseModel):
+    password: str
+
+@router.get("/users")
+async def api_get_users(user: dict = Depends(require_admin)):
+    return await db_manager.get_all_users()
+
+@router.post("/users")
+async def api_create_user(req: UserCreateRequest, user: dict = Depends(require_admin)):
+    username_clean = req.username.strip()
+    if not username_clean:
+        raise HTTPException(status_code=400, detail="Username cannot be empty")
+    if req.role not in ('Administrator', 'Operator'):
+        raise HTTPException(status_code=400, detail="Invalid user group / role")
+    
+    existing = await db_manager.get_user_by_username(username_clean)
+    if existing:
+        raise HTTPException(status_code=400, detail="User already exists")
+    
+    pw_hash = hash_password(req.password)
+    await db_manager.create_user(username_clean, pw_hash, req.role)
+    return {"status": "success", "message": f"User {username_clean} created"}
+
+@router.put("/users/{username}/password")
+async def api_reset_password(username: str, req: PasswordResetRequest, user: dict = Depends(require_admin)):
+    existing = await db_manager.get_user_by_username(username)
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    pw_hash = hash_password(req.password)
+    await db_manager.update_user_password(username, pw_hash)
+    return {"status": "success", "message": f"Password reset for user {username}"}
+
+@router.delete("/users/{username}")
+async def api_delete_user(username: str, user: dict = Depends(require_admin)):
+    existing = await db_manager.get_user_by_username(username)
+    if not existing:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Block deleting yourself
+    if username == user["username"]:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account while logged in")
+    
+    # Block deleting the last administrator
+    if existing["role"] == "Administrator":
+        admin_count = await db_manager.count_administrators()
+        if admin_count <= 1:
+            raise HTTPException(status_code=400, detail="Cannot delete the last Administrator account")
+            
+    await db_manager.delete_user(username)
+    return {"status": "success", "message": f"User {username} deleted"}
 
 # ------------------------------------------------------------------ #
 #  Camera name cache (refreshed every 5 minutes)
@@ -32,7 +163,7 @@ async def perform_camera_sync(cfg: AppConfig):
         logger.error(f"Background camera cache sync failed: {e}")
 
 @router.get("/cameras")
-async def get_cameras():
+async def get_cameras(user: dict = Depends(get_current_user)):
     """Return a cameraId→name map from the database cache."""
     cached_cams = await db_manager.get_cached_cameras()
     if not cached_cams:
@@ -49,7 +180,7 @@ async def get_cameras():
     return {cam["camera_id"]: cam["name"] for cam in cached_cams}
 
 @router.get("/cameras/by-engine")
-async def get_cameras_by_engine(background_tasks: BackgroundTasks):
+async def get_cameras_by_engine(background_tasks: BackgroundTasks, user: dict = Depends(require_admin)):
     cached_cams = await db_manager.get_cached_cameras()
     cfg = await load_config()
     
@@ -116,11 +247,39 @@ def format_cached_cameras(cameras: list[dict]) -> dict:
     return {"lpr": lpr_cameras, "fr": fr_cameras}
 
 # ------------------------------------------------------------------ #
+#  Target Lists / Categories
+# ------------------------------------------------------------------ #
+
+@router.get("/categories/lpr")
+async def get_lpr_categories(user: dict = Depends(require_admin)):
+    cfg = await load_config()
+    if not cfg or not cfg.vaidio.base_url or "localhost" in cfg.vaidio.base_url:
+        return []
+    try:
+        client = VaidioClient(cfg)
+        return await client.get_lpr_category_names()
+    except Exception as e:
+        logger.error(f"Failed to fetch LPR categories: {e}")
+        return []
+
+@router.get("/categories/fr")
+async def get_fr_categories(user: dict = Depends(require_admin)):
+    cfg = await load_config()
+    if not cfg or not cfg.vaidio.base_url or "localhost" in cfg.vaidio.base_url:
+        return []
+    try:
+        client = VaidioClient(cfg)
+        return await client.get_face_category_names()
+    except Exception as e:
+        logger.error(f"Failed to fetch FR categories: {e}")
+        return []
+
+# ------------------------------------------------------------------ #
 #  Image proxy — serves Vaidio images to avoid browser SSL errors
 # ------------------------------------------------------------------ #
 
 @router.get("/image")
-async def proxy_image(url: str = Query(...)):
+async def proxy_image(url: str = Query(...), user: dict = Depends(get_current_user)):
     try:
         cfg = await load_config()
         cache_enabled = cfg and cfg.image_cache_hours > 0
@@ -161,7 +320,7 @@ async def proxy_image(url: str = Query(...)):
 # ------------------------------------------------------------------ #
 
 @router.get("/config")
-async def get_config():
+async def get_config(user: dict = Depends(require_admin)):
     cfg = await load_config()
     if not cfg:
         raise HTTPException(status_code=404, detail="No config found")
@@ -171,7 +330,7 @@ async def get_config():
     return d
 
 @router.post("/config")
-async def set_config(cfg: AppConfig):
+async def set_config(cfg: AppConfig, user: dict = Depends(require_admin)):
     # If the API key is empty or contains asterisks, retain the existing one
     if not cfg.vaidio.api_key or "*" in cfg.vaidio.api_key:
         existing_cfg = await load_config()
@@ -188,18 +347,18 @@ async def set_config(cfg: AppConfig):
 
     # Start or stop LPR monitor based on enabled flag
     if cfg.job.enabled:
-        await lpr_monitor.start(cfg)
+        asyncio.create_task(lpr_monitor.start(cfg))
     else:
         lpr_monitor.stop()
     # Start or stop FR monitor based on enabled flag
     if cfg.fr.enabled:
-        await fr_monitor.start(cfg)
+        asyncio.create_task(fr_monitor.start(cfg))
     else:
         fr_monitor.stop()
     return {"message": "Config saved"}
 
 @router.post("/config/test")
-async def test_config(cfg: AppConfig):
+async def test_config(cfg: AppConfig, user: dict = Depends(require_admin)):
     # If the API key is empty or contains asterisks, retain the existing one
     if not cfg.vaidio.api_key or "*" in cfg.vaidio.api_key:
         existing_cfg = await load_config()
@@ -217,7 +376,7 @@ async def test_config(cfg: AppConfig):
 # ------------------------------------------------------------------ #
 
 @router.get("/monitor/status")
-async def get_lpr_status():
+async def get_lpr_status(user: dict = Depends(get_current_user)):
     status = lpr_monitor.get_status()
     cfg = await load_config()
     lookback = cfg.job.lookback_hours if cfg else 24
@@ -227,7 +386,8 @@ async def get_lpr_status():
 @router.get("/monitor/chart")
 async def get_lpr_chart(
     interval: str = Query(default="1h", pattern="^(5m|15m|30m|1h)$"),
-    lookback_hours: int = Query(default=None)
+    lookback_hours: int = Query(default=None),
+    user: dict = Depends(get_current_user)
 ):
     cfg = await load_config()
     if lookback_hours is None:
@@ -250,12 +410,13 @@ async def get_lpr_chart(
 
 
 @router.get("/monitor/logs")
-async def get_lpr_logs(limit: int = Query(default=50, ge=1, le=200)):
+async def get_lpr_logs(limit: int = Query(default=50, ge=1, le=200), user: dict = Depends(get_current_user)):
     return await db_manager.get_lpr_logs(limit=limit)
 
 @router.get("/monitor/target/history")
 async def get_lpr_target_history(
     characters: str = Query(...),
+    user: dict = Depends(get_current_user)
 ):
     """Return all Vaidio-searched detections for a given license plate within the configured lookback window."""
     cfg = await load_config()
@@ -275,7 +436,7 @@ async def get_lpr_target_history(
 # ------------------------------------------------------------------ #
 
 @router.get("/fr/status")
-async def get_fr_status():
+async def get_fr_status(user: dict = Depends(get_current_user)):
     status = fr_monitor.get_status()
     cfg = await load_config()
     lookback = cfg.fr.lookback_hours if cfg else 24
@@ -285,7 +446,8 @@ async def get_fr_status():
 @router.get("/fr/chart")
 async def get_fr_chart(
     interval: str = Query(default="1h", pattern="^(5m|15m|30m|1h)$"),
-    lookback_hours: int = Query(default=None)
+    lookback_hours: int = Query(default=None),
+    user: dict = Depends(get_current_user)
 ):
     cfg = await load_config()
     if lookback_hours is None:
@@ -308,7 +470,7 @@ async def get_fr_chart(
 
 
 @router.get("/fr/logs")
-async def get_fr_logs(limit: int = Query(default=50, ge=1, le=200)):
+async def get_fr_logs(limit: int = Query(default=50, ge=1, le=200), user: dict = Depends(get_current_user)):
     return await db_manager.get_fr_logs(limit=limit)
 
 @router.get("/fr/target/history")
@@ -317,6 +479,7 @@ async def get_fr_target_history(
     face_file: str = Query(default=None),
     detected_at: str = Query(default=None),
     face_match_id: int = Query(default=None),
+    user: dict = Depends(get_current_user)
 ):
     """Return detections for a face target.
     First tries to retrieve cached history from the local database. If missed,

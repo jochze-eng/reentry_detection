@@ -144,3 +144,6 @@ logs/
 
 # Local configs
 config.json
+
+# SSL Certificates
+/certs/

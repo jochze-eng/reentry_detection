@@ -148,6 +148,13 @@ class LPRMonitor:
     # ------------------------------------------------------------------ #
     async def _process_record(self, record: LPRRecord, cfg: AppConfig) -> ProcessedRecord:
         try:
+            # Check if category is excluded
+            is_excluded = False
+            if record.licensePlateTargetCategory and cfg.job.exclude_categories:
+                if record.licensePlateTargetCategory in cfg.job.exclude_categories:
+                    is_excluded = True
+                    logger.info(f"[LPR:{record.characters}] Excluded from triggering due to category: {record.licensePlateTargetCategory}")
+
             count = await self._client.get_plate_history_count(record.characters, anchor_dt=record.datetime)
             self.stats["total_processed"] += 1
             logger.info(f"[LPR:{record.characters}] history_count={count} threshold={cfg.job.threshold}")
@@ -158,27 +165,30 @@ class LPRMonitor:
             pos_str = f"{record.x},{record.y},{record.w},{record.h}"
 
             if count > cfg.job.threshold:
-                logger.warning(f"[LPR:{record.characters}] TRIGGERED — count={count} > threshold={cfg.job.threshold}")
-                try:
-                    event_created = await self._client.create_lpr_abnormal_event(record)
-                    triggered = True
-                    self.stats["total_triggered"] += 1
-                except Exception as e:
-                    logger.error(f"[LPR:{record.characters}] Failed to create abnormal event: {e}")
-                    return ProcessedRecord(
-                        licensePlateId=record.licensePlateId,
-                        characters=record.characters,
-                        confidence=record.confidence,
-                        detected_at=record.datetime,
-                        cameraId=record.cameraId,
-                        history_count=count,
-                        triggered=True,
-                        event_created=False,
-                        error=str(e),
-                        file=record.file,
-                        scene_thumbnail=record.sceneThumbnail,
-                        position=pos_str,
-                    )
+                if is_excluded:
+                    logger.info(f"[LPR:{record.characters}] Threshold exceeded ({count} > {cfg.job.threshold}), but category '{record.licensePlateTargetCategory}' is excluded from triggering.")
+                else:
+                    logger.warning(f"[LPR:{record.characters}] TRIGGERED — count={count} > threshold={cfg.job.threshold}")
+                    try:
+                        event_created = await self._client.create_lpr_abnormal_event(record)
+                        triggered = True
+                        self.stats["total_triggered"] += 1
+                    except Exception as e:
+                        logger.error(f"[LPR:{record.characters}] Failed to create abnormal event: {e}")
+                        return ProcessedRecord(
+                            licensePlateId=record.licensePlateId,
+                            characters=record.characters,
+                            confidence=record.confidence,
+                            detected_at=record.datetime,
+                            cameraId=record.cameraId,
+                            history_count=count,
+                            triggered=True,
+                            event_created=False,
+                            error=str(e),
+                            file=record.file,
+                            scene_thumbnail=record.sceneThumbnail,
+                            position=pos_str,
+                        )
 
             return ProcessedRecord(
                 licensePlateId=record.licensePlateId,

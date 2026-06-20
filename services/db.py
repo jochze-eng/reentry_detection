@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+import hashlib
 import asyncpg
 from datetime import datetime
 from models.config_model import AppConfig, VaidioConfig, JobConfig, FRConfig
@@ -9,6 +10,32 @@ from models.lpr_model import ProcessedRecord
 from models.fr_model import FRProcessedRecord
 
 logger = logging.getLogger(__name__)
+
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    pw_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt,
+        100000
+    )
+    return f"pbkdf2_sha256$100000${salt.hex()}${pw_hash.hex()}"
+
+def verify_password(password: str, hashed_password: str) -> bool:
+    try:
+        algorithm, iterations, salt_hex, hash_hex = hashed_password.split('$')
+        if algorithm != 'pbkdf2_sha256':
+            return False
+        salt = bytes.fromhex(salt_hex)
+        pw_hash = hashlib.pbkdf2_hmac(
+            'sha256',
+            password.encode('utf-8'),
+            salt,
+            int(iterations)
+        )
+        return pw_hash.hex() == hash_hex
+    except Exception:
+        return False
 
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = int(os.getenv("DB_PORT", "5434"))  # Default to 5434 for local dev to match remote mapped port
@@ -188,6 +215,48 @@ class DatabaseManager:
                 ALTER TABLE config ADD COLUMN IF NOT EXISTS image_cache_hours INTEGER DEFAULT 72 NOT NULL
             """)
 
+            # Add target exclusion list columns to config table if they don't exist yet
+            await conn.execute("""
+                ALTER TABLE config ADD COLUMN IF NOT EXISTS lpr_exclude_categories TEXT DEFAULT ''
+            """)
+            await conn.execute("""
+                ALTER TABLE config ADD COLUMN IF NOT EXISTS fr_exclude_categories TEXT DEFAULT ''
+            """)
+
+            # 7. Users table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password_hash TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('Administrator', 'Operator'))
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)")
+
+            # 8. Sessions table
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_sessions (
+                    session_token TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+                )
+            """)
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_token ON user_sessions (session_token)")
+
+            # Seed default users if empty
+            row_count = await conn.fetchval("SELECT COUNT(*) FROM users")
+            if row_count == 0:
+                admin_hash = hash_password("admin123")
+                operator_hash = hash_password("operator123")
+                await conn.execute("""
+                    INSERT INTO users (username, password_hash, role) VALUES
+                    ('admin', $1, 'Administrator'),
+                    ('operator', $2, 'Operator')
+                """, admin_hash, operator_hash)
+                logger.info("Seeded default users: admin (Administrator), operator (Operator).")
+
             logger.info("Database schemas verified/initialized successfully.")
 
     # ── Configuration Persistence ──
@@ -213,6 +282,12 @@ class DatabaseManager:
             
             fr_cam_str = row["fr_camera_ids"] if "fr_camera_ids" in row else ""
             fr_camera_ids = [int(x) for x in fr_cam_str.split(",") if x.strip()]
+
+            lpr_exclude_cat_str = row["lpr_exclude_categories"] if "lpr_exclude_categories" in row else ""
+            lpr_exclude_categories = [x.strip() for x in lpr_exclude_cat_str.split(",") if x.strip()]
+            
+            fr_exclude_cat_str = row["fr_exclude_categories"] if "fr_exclude_categories" in row else ""
+            fr_exclude_categories = [x.strip() for x in fr_exclude_cat_str.split(",") if x.strip()]
             
             return AppConfig(
                 vaidio=VaidioConfig(
@@ -225,14 +300,16 @@ class DatabaseManager:
                     page_size=row["lpr_page_size"],
                     lookback_hours=row["lpr_lookback_hours"],
                     threshold=row["lpr_threshold"],
-                    camera_ids=lpr_camera_ids
+                    camera_ids=lpr_camera_ids,
+                    exclude_categories=lpr_exclude_categories
                 ),
                 fr=FRConfig(
                     enabled=row["fr_enabled"],
                     poll_interval_seconds=row["fr_poll_interval"],
                     lookback_hours=row["fr_lookback_hours"],
                     threshold=row["fr_threshold"],
-                    camera_ids=fr_camera_ids
+                    camera_ids=fr_camera_ids,
+                    exclude_categories=fr_exclude_categories
                 ),
                 image_cache_hours=row["image_cache_hours"] if "image_cache_hours" in row else 72
             )
@@ -243,6 +320,8 @@ class DatabaseManager:
 
         lpr_cam_str = ",".join(map(str, cfg.job.camera_ids))
         fr_cam_str = ",".join(map(str, cfg.fr.camera_ids))
+        lpr_exclude_cat_str = ",".join(cfg.job.exclude_categories)
+        fr_exclude_cat_str = ",".join(cfg.fr.exclude_categories)
 
         async with self.pool.acquire() as conn:
             await conn.execute("""
@@ -250,8 +329,9 @@ class DatabaseManager:
                     id, vaidio_base_url, vaidio_api_key,
                     lpr_enabled, lpr_poll_interval, lpr_page_size, lpr_lookback_hours, lpr_threshold,
                     fr_enabled, fr_poll_interval, fr_lookback_hours, fr_threshold,
-                    lpr_camera_ids, fr_camera_ids, image_cache_hours
-                ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                    lpr_camera_ids, fr_camera_ids, image_cache_hours,
+                    lpr_exclude_categories, fr_exclude_categories
+                ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
                 ON CONFLICT (id) DO UPDATE SET
                     vaidio_base_url = EXCLUDED.vaidio_base_url,
                     vaidio_api_key = EXCLUDED.vaidio_api_key,
@@ -266,7 +346,9 @@ class DatabaseManager:
                     fr_threshold = EXCLUDED.fr_threshold,
                     lpr_camera_ids = EXCLUDED.lpr_camera_ids,
                     fr_camera_ids = EXCLUDED.fr_camera_ids,
-                    image_cache_hours = EXCLUDED.image_cache_hours
+                    image_cache_hours = EXCLUDED.image_cache_hours,
+                    lpr_exclude_categories = EXCLUDED.lpr_exclude_categories,
+                    fr_exclude_categories = EXCLUDED.fr_exclude_categories
             """,
             cfg.vaidio.base_url,
             cfg.vaidio.api_key,
@@ -281,7 +363,9 @@ class DatabaseManager:
             cfg.fr.threshold,
             lpr_cam_str,
             fr_cam_str,
-            cfg.image_cache_hours
+            cfg.image_cache_hours,
+            lpr_exclude_cat_str,
+            fr_exclude_cat_str
             )
             logger.info("Configuration saved to database.")
 
@@ -754,6 +838,78 @@ class DatabaseManager:
                     WHERE created_at < NOW() - ($1 * INTERVAL '1 hour')
                 """, lookback_hours)
                 logger.info(f"Deleted expired cached images: {res}")
+
+    async def get_user_by_username(self, username: str) -> dict | None:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM users WHERE username = $1", username)
+            return dict(row) if row else None
+
+    async def create_session(self, session_token: str, username: str, role: str, expires_at: datetime):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO user_sessions (session_token, username, role, expires_at)
+                VALUES ($1, $2, $3, $4)
+            """, session_token, username, role, expires_at)
+
+    async def get_session(self, session_token: str) -> dict | None:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM user_sessions WHERE session_token = $1", session_token)
+            return dict(row) if row else None
+
+    async def delete_session(self, session_token: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM user_sessions WHERE session_token = $1", session_token)
+
+    async def delete_expired_sessions(self):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM user_sessions WHERE expires_at < NOW()")
+
+    async def get_all_users(self) -> list[dict]:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch("SELECT id, username, role FROM users ORDER BY username ASC")
+            return [dict(row) for row in rows]
+
+    async def create_user(self, username: str, password_hash: str, role: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO users (username, password_hash, role)
+                VALUES ($1, $2, $3)
+            """, username, password_hash, role)
+
+    async def update_user_password(self, username: str, new_password_hash: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE users SET password_hash = $1 WHERE username = $2
+            """, new_password_hash, username)
+
+    async def delete_user(self, username: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM user_sessions WHERE username = $1", username)
+            await conn.execute("DELETE FROM users WHERE username = $1", username)
+
+    async def count_administrators(self) -> int:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT COUNT(*) FROM users WHERE role = 'Administrator'")
 
 
 

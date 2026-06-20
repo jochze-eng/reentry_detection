@@ -10,6 +10,7 @@ class FRRecord(BaseModel):
     sceneId: int
     faceTargetId: str
     faceTargetName: str
+    faceTargetCategory: Optional[str] = None
     file: str           # faceKey.file — used to get descriptor and as log display
     position: str       # raw string "x,y,w,h"
     confidence: float
