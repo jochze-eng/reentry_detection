@@ -120,14 +120,45 @@ async def lifespan(app: FastAPI):
     fr_monitor.stop()
     await db_manager.disconnect()
 
-app = FastAPI(title="Vaidio LPR & FR Monitor", lifespan=lifespan)
+app = FastAPI(
+    title="Vaidio LPR & FR Monitor",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://100.101.159.22:8088",
+        "https://localhost:8088",
+        "http://localhost:8088",
+        "https://127.0.0.1:8088",
+        "http://127.0.0.1:8088"
+    ],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: blob: *; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none';"
+    )
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

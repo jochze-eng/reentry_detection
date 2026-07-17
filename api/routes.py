@@ -46,16 +46,68 @@ async def require_admin(user: dict = Depends(get_current_user)) -> dict:
 #  Authentication Endpoints
 # ------------------------------------------------------------------ #
 
+from collections import defaultdict
+
+class LoginRateLimiter:
+    def __init__(self):
+        self.failures_by_user = defaultdict(list)
+        self.failures_by_ip = defaultdict(list)
+        self.lock = asyncio.Lock()
+
+    async def check_and_throttle(self, username: str, ip: str):
+        now = time.time()
+        async with self.lock:
+            self.failures_by_user[username] = [t for t in self.failures_by_user[username] if now - t < 60]
+            self.failures_by_ip[ip] = [t for t in self.failures_by_ip[ip] if now - t < 60]
+            
+            user_fails = len(self.failures_by_user[username])
+            ip_fails = len(self.failures_by_ip[ip])
+            
+            max_fails = max(user_fails, ip_fails)
+            if max_fails >= 5:
+                delay = min(1.0 + (max_fails - 5) * 0.5, 10.0)
+                logger.warning(f"Login rate limit reached. Throttling request for {username} from IP {ip} by {delay:.2f} seconds.")
+                await asyncio.sleep(delay)
+
+    async def record_failure(self, username: str, ip: str):
+        now = time.time()
+        async with self.lock:
+            self.failures_by_user[username].append(now)
+            self.failures_by_ip[ip].append(now)
+
+    async def record_success(self, username: str, ip: str):
+        async with self.lock:
+            self.failures_by_user.pop(username, None)
+            self.failures_by_ip.pop(ip, None)
+
+login_rate_limiter = LoginRateLimiter()
+
 class LoginRequest(BaseModel):
     username: str
     password: str
 
+class ChangeDefaultPasswordRequest(BaseModel):
+    username: str
+    old_password: str
+    new_password: str
+
 @router.post("/login")
 async def api_login(req: LoginRequest, request: Request, response: Response):
+    client_ip = request.client.host if request.client else "unknown"
+    await login_rate_limiter.check_and_throttle(req.username, client_ip)
+
     user = await db_manager.get_user_by_username(req.username)
     if not user or not verify_password(req.password, user["password_hash"]):
+        await login_rate_limiter.record_failure(req.username, client_ip)
         raise HTTPException(status_code=400, detail="Invalid username or password")
     
+    # Check if user needs to change default password
+    if user.get("must_change_password"):
+        await login_rate_limiter.record_success(req.username, client_ip)
+        return {"status": "must_change_password", "username": user["username"]}
+
+    await login_rate_limiter.record_success(req.username, client_ip)
+
     token = secrets.token_hex(32)
     expires_at = datetime.now(timezone.utc) + timedelta(days=1)
     
@@ -72,6 +124,26 @@ async def api_login(req: LoginRequest, request: Request, response: Response):
         path="/"
     )
     return {"status": "success", "username": user["username"], "role": user["role"]}
+
+@router.post("/change-default-password")
+async def api_change_default_password(req: ChangeDefaultPasswordRequest):
+    user = await db_manager.get_user_by_username(req.username)
+    if not user or not verify_password(req.old_password, user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Invalid username or password")
+    
+    if not user.get("must_change_password"):
+        raise HTTPException(status_code=400, detail="Password change not required for this user")
+        
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters long")
+    if req.new_password in ("admin123", "operator123"):
+        raise HTTPException(status_code=400, detail="New password cannot be a default password")
+        
+    pw_hash = hash_password(req.new_password)
+    await db_manager.update_user_password_and_clear_must_change(req.username, pw_hash)
+    await db_manager.delete_sessions_for_user(req.username)
+    
+    return {"status": "success", "message": "Password updated successfully. Please log in with your new password."}
 
 @router.post("/logout")
 async def api_logout(request: Request, response: Response):
@@ -125,6 +197,7 @@ async def api_reset_password(username: str, req: PasswordResetRequest, user: dic
     
     pw_hash = hash_password(req.password)
     await db_manager.update_user_password(username, pw_hash)
+    await db_manager.delete_sessions_for_user(username)
     return {"status": "success", "message": f"Password reset for user {username}"}
 
 @router.delete("/users/{username}")
@@ -278,10 +351,59 @@ async def get_fr_categories(user: dict = Depends(require_admin)):
 #  Image proxy — serves Vaidio images to avoid browser SSL errors
 # ------------------------------------------------------------------ #
 
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
+def is_private_ip(hostname: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(hostname)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(hostname, None)
+        for info in infos:
+            ip_str = info[4][0]
+            ip = ipaddress.ip_address(ip_str)
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                return True
+    except Exception:
+        pass
+    return False
+
 @router.get("/image")
 async def proxy_image(url: str = Query(...), user: dict = Depends(get_current_user)):
     try:
         cfg = await load_config()
+        if not cfg or not cfg.vaidio.base_url:
+            raise HTTPException(status_code=400, detail="Vaidio base URL is not configured")
+            
+        parsed_url = urlparse(url)
+        parsed_base = urlparse(cfg.vaidio.base_url)
+        
+        hostname = parsed_url.hostname
+        base_hostname = parsed_base.hostname
+        
+        if not hostname or not base_hostname:
+            raise HTTPException(status_code=400, detail="Invalid URL or configured base URL")
+            
+        # Domain allowlist: must match configured vaidio_base_url domain
+        if hostname.lower() != base_hostname.lower():
+            raise HTTPException(status_code=400, detail="URL does not match configured Vaidio base URL domain")
+            
+        # Scheme check: must be https (or match configured base URL scheme)
+        allowed_schemes = {"https"}
+        if parsed_base.scheme:
+            allowed_schemes.add(parsed_base.scheme)
+        if parsed_url.scheme not in allowed_schemes:
+            raise HTTPException(status_code=400, detail="URL scheme is not allowed")
+            
+        # Private IP check (RFC 1918, loopback, link-local)
+        # Block private IPs, except if the hostname matches base_hostname
+        if is_private_ip(hostname) and hostname.lower() != base_hostname.lower():
+            raise HTTPException(status_code=400, detail="Private IP ranges are blocked")
+
         cache_enabled = cfg and cfg.image_cache_hours > 0
 
         # Try fetching from DB cache first
@@ -311,6 +433,8 @@ async def proxy_image(url: str = Query(...), user: dict = Depends(get_current_us
                 logger.error(f"Failed to insert image cache for {url}: {cache_err}")
 
         return Response(content=content, media_type=content_type)
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Image fetch failed: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail=f"Image fetch failed: {e}")

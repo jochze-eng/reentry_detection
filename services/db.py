@@ -234,6 +234,10 @@ class DatabaseManager:
             """)
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)")
 
+            await conn.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT FALSE NOT NULL
+            """)
+
             # 8. Sessions table
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS user_sessions (
@@ -248,14 +252,27 @@ class DatabaseManager:
             # Seed default users if empty
             row_count = await conn.fetchval("SELECT COUNT(*) FROM users")
             if row_count == 0:
-                admin_hash = hash_password("admin123")
+                admin_hash = hash_password("admin888")
                 operator_hash = hash_password("operator123")
                 await conn.execute("""
-                    INSERT INTO users (username, password_hash, role) VALUES
-                    ('admin', $1, 'Administrator'),
-                    ('operator', $2, 'Operator')
+                    INSERT INTO users (username, password_hash, role, must_change_password) VALUES
+                    ('admin', $1, 'Administrator', TRUE),
+                    ('operator', $2, 'Operator', TRUE)
                 """, admin_hash, operator_hash)
-                logger.info("Seeded default users: admin (Administrator), operator (Operator).")
+                logger.info("Seeded default users: admin (Administrator), operator (Operator) with must_change_password=True.")
+            else:
+                # Upgrade existing database: check if default users are using default passwords
+                existing_users = await conn.fetch("SELECT username, password_hash, must_change_password FROM users")
+                for u in existing_users:
+                    is_default = False
+                    if u["username"] == "admin" and (verify_password("admin888", u["password_hash"]) or verify_password("admin123", u["password_hash"])):
+                        is_default = True
+                    elif u["username"] == "operator" and verify_password("operator123", u["password_hash"]):
+                        is_default = True
+                    
+                    if is_default and not u["must_change_password"]:
+                        await conn.execute("UPDATE users SET must_change_password = TRUE WHERE username = $1", u["username"])
+                        logger.info(f"Marked existing user '{u['username']}' with default password to change it on first login.")
 
             logger.info("Database schemas verified/initialized successfully.")
 
@@ -850,6 +867,21 @@ class DatabaseManager:
         if not self.pool:
             await self.connect()
         async with self.pool.acquire() as conn:
+            # Enforce concurrent sessions cap per user (limit to 5) by pruning oldest
+            sessions = await conn.fetch("""
+                SELECT session_token FROM user_sessions
+                WHERE username = $1
+                ORDER BY expires_at ASC
+            """, username)
+            
+            if len(sessions) >= 5:
+                num_to_delete = len(sessions) - 4
+                tokens_to_delete = [s["session_token"] for s in sessions[:num_to_delete]]
+                await conn.execute("""
+                    DELETE FROM user_sessions WHERE session_token = ANY($1)
+                """, tokens_to_delete)
+                logger.info(f"Pruned {num_to_delete} oldest session(s) for user '{username}' due to concurrent limit.")
+
             await conn.execute("""
                 INSERT INTO user_sessions (session_token, username, role, expires_at)
                 VALUES ($1, $2, $3, $4)
@@ -896,6 +928,20 @@ class DatabaseManager:
         async with self.pool.acquire() as conn:
             await conn.execute("""
                 UPDATE users SET password_hash = $1 WHERE username = $2
+            """, new_password_hash, username)
+
+    async def delete_sessions_for_user(self, username: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM user_sessions WHERE username = $1", username)
+
+    async def update_user_password_and_clear_must_change(self, username: str, new_password_hash: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                UPDATE users SET password_hash = $1, must_change_password = FALSE WHERE username = $2
             """, new_password_hash, username)
 
     async def delete_user(self, username: str):

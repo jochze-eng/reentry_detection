@@ -213,7 +213,7 @@
           <label for="password">Password</label>
           <div class="input-wrapper">
             <input type="password" id="password" autocomplete="current-password" required placeholder="Enter password" />
-            <button type="button" class="password-toggle" onclick="togglePasswordVisibility()">
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('password', 'eye-icon')">
               <svg id="eye-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
             </button>
           </div>
@@ -224,13 +224,50 @@
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
         </button>
       </form>
+
+      <form id="reset-password-form" style="display: none;" onsubmit="handleResetPassword(event)">
+        <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 20px; text-align: center; line-height: 1.5;">
+          You are using a default password. Please choose a new secure password.
+        </div>
+        <div class="input-group">
+          <label for="new-password">New Password</label>
+          <div class="input-wrapper">
+            <input type="password" id="new-password" required placeholder="Enter new password" minlength="8" />
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('new-password', 'eye-icon-new')">
+              <svg id="eye-icon-new" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="input-group">
+          <label for="confirm-password">Confirm New Password</label>
+          <div class="input-wrapper">
+            <input type="password" id="confirm-password" required placeholder="Confirm new password" minlength="8" />
+            <button type="button" class="password-toggle" onclick="togglePasswordVisibility('confirm-password', 'eye-icon-confirm')">
+              <svg id="eye-icon-confirm" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <button type="submit" class="btn-login">
+          <span>Change Password</span>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+        </button>
+
+        <button type="button" class="btn-login" style="margin-top: 10px; background: transparent; border: 1px solid var(--border-color); box-shadow: none;" onclick="cancelResetPassword()">
+          <span>Back to Login</span>
+        </button>
+      </form>
     </div>
   </div>
 
   <script>
-    function togglePasswordVisibility() {
-      const passwordInput = document.getElementById('password');
-      const eyeIcon = document.getElementById('eye-icon');
+    let currentUsername = '';
+    let currentPassword = '';
+
+    function togglePasswordVisibility(inputId = 'password', iconId = 'eye-icon') {
+      const passwordInput = document.getElementById(inputId);
+      const eyeIcon = document.getElementById(iconId);
       if (passwordInput.type === 'password') {
         passwordInput.type = 'text';
         eyeIcon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>';
@@ -246,6 +283,10 @@
       const errorMsg = document.getElementById('error-msg');
       const loginCard = document.getElementById('login-card');
       
+      // Reset error banner colors to default red
+      errorBanner.style.background = 'rgba(239, 68, 68, 0.1)';
+      errorBanner.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+      errorBanner.style.color = 'var(--color-error)';
       errorBanner.style.display = 'none';
       loginCard.classList.remove('shake');
 
@@ -267,6 +308,19 @@
         }
 
         const data = await response.json();
+
+        if (data.status === 'must_change_password') {
+          // Store credentials for the change password request
+          currentUsername = username;
+          currentPassword = password;
+          
+          // Switch to reset password form
+          document.getElementById('login-form').style.display = 'none';
+          document.getElementById('reset-password-form').style.display = 'block';
+          errorBanner.style.display = 'none';
+          return;
+        }
+
         // Redirect to dashboard
         window.location.href = '/';
       } catch (err) {
@@ -274,6 +328,86 @@
         void loginCard.offsetWidth; // trigger reflow
         loginCard.classList.add('shake');
         
+        errorMsg.textContent = err.message;
+        errorBanner.style.display = 'flex';
+      }
+    }
+
+    function cancelResetPassword() {
+      document.getElementById('reset-password-form').style.display = 'none';
+      document.getElementById('login-form').style.display = 'block';
+      // Clear values
+      document.getElementById('new-password').value = '';
+      document.getElementById('confirm-password').value = '';
+      currentUsername = '';
+      currentPassword = '';
+    }
+
+    async function handleResetPassword(event) {
+      event.preventDefault();
+      const errorBanner = document.getElementById('error-banner');
+      const errorMsg = document.getElementById('error-msg');
+      const loginCard = document.getElementById('login-card');
+      
+      // Reset error banner colors to default red
+      errorBanner.style.background = 'rgba(239, 68, 68, 0.1)';
+      errorBanner.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+      errorBanner.style.color = 'var(--color-error)';
+      errorBanner.style.display = 'none';
+      loginCard.classList.remove('shake');
+
+      const newPassword = document.getElementById('new-password').value;
+      const confirmPassword = document.getElementById('confirm-password').value;
+
+      if (newPassword !== confirmPassword) {
+        void loginCard.offsetWidth; // trigger reflow
+        loginCard.classList.add('shake');
+        errorMsg.textContent = 'Passwords do not match';
+        errorBanner.style.display = 'flex';
+        return;
+      }
+
+      if (newPassword === currentPassword) {
+        void loginCard.offsetWidth; // trigger reflow
+        loginCard.classList.add('shake');
+        errorMsg.textContent = 'New password cannot be the same as the old password';
+        errorBanner.style.display = 'flex';
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/change-default-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            username: currentUsername,
+            old_password: currentPassword,
+            new_password: newPassword
+          })
+        });
+
+        if (!response.ok) {
+          const err = await response.json();
+          throw new Error(err.detail || 'Failed to change password');
+        }
+
+        // Show success banner on login form
+        cancelResetPassword();
+        
+        // Show success banner by temporarily modifying colors
+        errorMsg.textContent = 'Password changed successfully! Please log in with your new password.';
+        errorBanner.style.background = 'rgba(16, 185, 129, 0.1)';
+        errorBanner.style.borderColor = 'rgba(16, 185, 129, 0.2)';
+        errorBanner.style.color = 'rgb(52, 211, 153)';
+        errorBanner.style.display = 'flex';
+        
+        document.getElementById('username').value = currentUsername;
+        document.getElementById('password').value = '';
+      } catch (err) {
+        void loginCard.offsetWidth; // trigger reflow
+        loginCard.classList.add('shake');
         errorMsg.textContent = err.message;
         errorBanner.style.display = 'flex';
       }

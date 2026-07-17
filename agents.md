@@ -19,21 +19,24 @@ The service exposes a web UI at `https://<host>:8088` for configuration and real
 
 ```
 main.py                  ← FastAPI app entry point, lifespan startup/shutdown
-config.py                ← Load/save config.json (Pydantic-backed)
+config.py                ← Load/save configuration from database (Pydantic-backed)
 api/
-  routes.py              ← REST endpoints (/api/config, /api/monitor/*, /api/fr/*, /api/image)
+  routes.py              ← REST endpoints (auth, users, config, cameras, monitor, fr, image)
 models/
   config_model.py        ← AppConfig, VaidioConfig, JobConfig, FRConfig (Pydantic)
   lpr_model.py           ← LPRRecord, ProcessedRecord
   fr_model.py            ← FRRecord, FRProcessedRecord
 services/
+  db.py                  ← DbManager: PostgreSQL connection pooling, migrations, logs, cache, and users
   lpr_monitor.py         ← LPRMonitor: async polling loop for license plates
   fr_monitor.py          ← FRMonitor: async polling loop for face matches
   vaidio_client.py       ← VaidioClient: all HTTP calls to the Vaidio AINVR API
 static/
+  login.html             ← Login page (served at /login)
   lpr.html               ← LPR Monitor dashboard page (served at /)
   fr.html                ← FR Monitor dashboard page (served at /fr)
   settings.html          ← Settings configuration page (served at /settings)
+  users.html             ← User Management dashboard page (served at /users)
   style.css              ← Stylesheet
 ```
 
@@ -43,7 +46,7 @@ static/
 
 ### Startup
 
-`main.py` uses an async lifespan context manager. On startup, it reads the configuration from the database and conditionally launches `LPRMonitor` and/or `FRMonitor` as background tasks (`asyncio.create_task`) depending on whether each is enabled. This ensures that the web application starts up instantly and passes Docker healthchecks without being blocked by long-running monitor initialization loops that query external NVR endpoints. On shutdown, both monitors are stopped gracefully.
+`main.py` uses an async lifespan context manager. On startup, it connects to PostgreSQL, verifies/initializes the schemas, launches a background task for periodic hourly image cache cleanup, and reads the configuration. It then conditionally launches `LPRMonitor` and/or `FRMonitor` as background tasks (`asyncio.create_task`) depending on whether each is enabled. This ensures that the web application starts up instantly and passes Docker healthchecks without being blocked by long-running monitor initialization loops that query external NVR endpoints. On shutdown, both monitors are stopped gracefully.
 
 ### Cursor-Based Polling Loop (shared by both monitors)
 
@@ -57,20 +60,26 @@ Each monitor runs an independent async polling loop:
 3. **Process each new record** (see below).
 4. **Log result** to an in-memory deque (max 200 entries, FIFO).
 
-### LPR Processing (`services/lpr_monitor.py:146–198`)
+### LPR Processing (`services/lpr_monitor.py` `_process_record()`)
 
 For each new license plate detection:
-1. Call `get_plate_history_count()` — counts all detections of that plate string in the lookback window.
-2. If count > threshold → call `create_lpr_abnormal_event()` to post a scene event to Vaidio with vehicle bounding box and snapshot image.
-3. Record the result (triggered / not triggered / error) in the log.
+1. **Check Exclusion**: If `licensePlateTargetCategory` matches any category in `lpr_exclude_categories`, the target is marked as excluded from triggering abnormal events.
+2. **Get Count**: Call `get_plate_history_count()` — counts all detections of that plate string in the lookback window.
+3. **Trigger**: If count > threshold:
+   - If excluded, log the threshold breach but do not trigger or send abnormal event.
+   - If not excluded, call `create_lpr_abnormal_event()` to post a scene event to Vaidio with vehicle bounding box and snapshot image, setting `triggered` and `event_created` to true.
+4. Record the result in the log and database `lpr_logs`.
 
-### FR Processing (`services/fr_monitor.py:146–192`)
+### FR Processing (`services/fr_monitor.py` `_process_record()`)
 
 For each new face match detection (two-step):
-1. **Extract descriptor**: POST the face image URL to `/ainvr/api/face` → get a neural embedding vector.
-2. **Search history**: POST that descriptor to `/ainvr/api/face/search` → count similar faces in the lookback window.
-3. If count > threshold → call `create_fr_abnormal_event()` to post a scene event with person bounding box and face thumbnail.
-4. Record result in the log; thumbnail is proxied via `/api/image` to bypass CORS.
+1. **Check Exclusion**: If `faceTargetCategory` matches any category in `fr_exclude_categories`, the target is marked as excluded from triggering abnormal events.
+2. **Extract descriptor**: POST the face image URL to `/ainvr/api/face` → get a neural embedding vector.
+3. **Search history**: POST that descriptor to `/ainvr/api/face/search` → retrieve similar face matches in the lookback window.
+4. **Trigger**: If count (number of history matches) > threshold:
+   - If excluded, log the threshold breach but do not trigger or send abnormal event.
+   - If not excluded, call `create_fr_abnormal_event()` to post a scene event with person bounding box and face thumbnail, setting `triggered` and `event_created` to true.
+5. Record the result in the log and database `fr_logs` (along with caching similar match records in `fr_history_cache` if triggered), and proxy the thumbnail via `/api/image` to bypass CORS.
 
 ### State Machine
 
@@ -87,21 +96,41 @@ State is visible in the web UI status badge (with animated pulse during active s
 
 ## API Endpoints
 
+### Page Routes
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/` | Serves the LPR Monitor dashboard page (`static/lpr.html`) |
-| `GET` | `/fr` | Serves the FR Monitor dashboard page (`static/fr.html`) |
-| `GET` | `/settings` | Serves the Settings page (`static/settings.html`) |
-| `GET` | `/api/image?url=...` | Image proxy (bypasses SSL/CORS for Vaidio images) |
-| `GET` | `/api/config` | Returns current config (API key masked to first 6 chars) |
-| `POST` | `/api/config` | Saves config and restarts monitors |
-| `POST` | `/api/config/test` | Tests connectivity to the Vaidio server |
-| `GET` | `/api/cameras/by-engine` | Returns available cameras grouped by enabled engine (LPR/FR) |
+| `GET` | `/` | Serves the LPR Monitor dashboard page (`static/lpr.html`) (requires authentication) |
+| `GET` | `/fr` | Serves the FR Monitor dashboard page (`static/fr.html`) (requires authentication) |
+| `GET` | `/settings` | Serves the Settings page (`static/settings.html`) (requires Admin role) |
+| `GET` | `/users` | Serves the User Management page (`static/users.html`) (requires Admin role) |
+| `GET` | `/login` | Serves the Login page (`static/login.html`) |
+
+### API Routes
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/login` | Authenticates user and sets session token cookie |
+| `POST` | `/api/logout` | Invalidates active user session |
+| `GET` | `/api/user/me` | Returns current logged-in user info |
+| `GET` | `/api/users` | Lists all user accounts (Admin only) |
+| `POST` | `/api/users` | Creates a new user account (Admin only) |
+| `PUT` | `/api/users/{username}/password` | Resets password for a user (Admin only) |
+| `DELETE` | `/api/users/{username}` | Deletes a user account (Admin only) |
+| `GET` | `/api/cameras` | Lists all cached NVR cameras from the database |
+| `GET` | `/api/cameras/by-engine` | Returns available cameras grouped by engine plugin (Admin only) |
+| `GET` | `/api/categories/lpr` | Returns unique target categories for License Plates (Admin only) |
+| `GET` | `/api/categories/fr` | Returns unique target categories for Faces (Admin only) |
+| `GET` | `/api/image?url=...` | Image proxy (bypasses SSL/CORS and caches locally up to retention hours) |
+| `GET` | `/api/config` | Returns current config (API key masked, Admin only) |
+| `POST` | `/api/config` | Saves config and restarts monitors (Admin only) |
+| `POST` | `/api/config/test` | Tests connectivity to the Vaidio server (Admin only) |
 | `GET` | `/api/monitor/status` | LPR monitor status snapshot (includes `unique_lpr_count` in stats) |
-| `GET` | `/api/monitor/logs` | Recent LPR log entries (default 50, max 200) |
+| `GET` | `/api/monitor/chart` | Returns hourly LPR stats for dashboard charts |
+| `GET` | `/api/monitor/logs` | Recent LPR log entries from the database (default 50, max 200) |
+| `GET` | `/api/monitor/target/history?characters=...` | Retrieves LPR history for target details directly from Vaidio |
 | `GET` | `/api/fr/status` | FR monitor status snapshot (includes `unique_fr_count` in stats) |
-| `GET` | `/api/fr/logs` | Recent FR log entries (default 50, max 200) |
-| `GET` | `/api/fr/target/history?face_file=...` | Retrieves face similarity matches history from Vaidio for target details view |
+| `GET` | `/api/fr/chart` | Returns hourly FR stats for dashboard charts |
+| `GET` | `/api/fr/logs` | Recent FR log entries from the database (default 50, max 200) |
+| `GET` | `/api/fr/target/history?face_target_id=...` | Retrieves similar face match history (checks `fr_history_cache` first, falls back to Vaidio search) |
 
 ---
 
@@ -132,11 +161,13 @@ Stores the global app configuration (exactly 1 row).
 *   `lpr_lookback_hours` (integer)
 *   `lpr_threshold` (integer)
 *   `lpr_camera_ids` (text) — comma-separated string of selected camera IDs
+*   `lpr_exclude_categories` (text) — comma-separated string of license plate target categories excluded from triggering
 *   `fr_enabled` (boolean)
 *   `fr_poll_interval` (integer)
 *   `fr_lookback_hours` (integer)
 *   `fr_threshold` (integer)
 *   `fr_camera_ids` (text) — comma-separated string of selected camera IDs
+*   `fr_exclude_categories` (text) — comma-separated string of face match target categories excluded from triggering
 *   `image_cache_hours` (integer) — duration in hours to cache proxy images (default: 72 hours, 0 to disable)
 
 #### 2. `lpr_logs` Table
@@ -170,6 +201,7 @@ Persists processed Face Recognition detection events.
 *   `error_msg` (text, nullable)
 *   `position` (text, default '0,0,0,0') — face bounding box coordinates
 *   `confidence` (double precision, default 0.0) — match confidence score
+*   `descriptor` (text, nullable) — facial descriptor/embedding string for caching
 
 #### 4. `cameras` Table
 Caches the list of available NVR cameras to support fast settings page loading and camera status checks.
