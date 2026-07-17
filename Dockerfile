@@ -25,6 +25,7 @@ COPY models/    ./models/
 COPY services/  ./services/
 COPY static/    ./static/
 COPY certs/     ./certs/
+COPY keys/      ./keys/
 COPY config.py  ./config.py
 COPY main.py    ./main.py
 

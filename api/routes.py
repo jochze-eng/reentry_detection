@@ -8,6 +8,7 @@ from services.lpr_monitor import lpr_monitor
 from services.fr_monitor import fr_monitor
 from services.vaidio_client import VaidioClient
 from services.db import db_manager, verify_password, hash_password
+from services.licensing import compute_fingerprint, verify_license, LicenseError
 from config import load_config, save_config
 import httpx
 import logging
@@ -683,3 +684,64 @@ async def get_fr_target_history(
     except Exception as e:
         logger.error(f"Error fetching target history for {face_target_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+# ------------------------------------------------------------------ #
+#  License Management
+# ------------------------------------------------------------------ #
+
+class LicenseActivateRequest(BaseModel):
+    token: str
+
+@router.get("/license/fingerprint")
+async def get_license_fingerprint(user: dict = Depends(require_admin)):
+    """Return this machine's fingerprint for the operator to send to the vendor."""
+    try:
+        fp = compute_fingerprint()
+    except LicenseError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    source = fp.split(":", 1)[0]
+    warning = None
+    if source == "vol":
+        warning = "No hardware machine ID found; binding to a host volume (weaker node-lock)."
+    return {"fingerprint": fp, "source": source, "strength_warning": warning}
+
+@router.get("/license/status")
+async def get_license_status(user: dict = Depends(require_admin)):
+    """Report the current license state by verifying the stored token against this host."""
+    token = await db_manager.get_license_token()
+    if not token:
+        return {"licensed": False, "reason": "no_license"}
+    try:
+        info = verify_license(token, fingerprint=compute_fingerprint())
+    except LicenseError as e:
+        return {"licensed": False, "reason": "invalid", "detail": str(e)}
+    return {
+        "licensed": info.fingerprint_ok and not info.expired,
+        "customer": info.customer,
+        "license_id": info.license_id,
+        "issued_at": info.issued_at,
+        "expires_at": info.expires_at,
+        "days_left": info.days_left,
+        "expired": info.expired,
+        "fingerprint_ok": info.fingerprint_ok,
+        "limits": info.limits,
+    }
+
+@router.post("/license/activate")
+async def activate_license(req: LicenseActivateRequest, user: dict = Depends(require_admin)):
+    """Verify an uploaded license against this machine and store it if valid."""
+    try:
+        fp = compute_fingerprint()
+    except LicenseError as e:
+        raise HTTPException(status_code=503, detail=f"Cannot read machine fingerprint: {e}")
+    try:
+        info = verify_license(req.token.strip(), fingerprint=fp)
+    except LicenseError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid license: {e}")
+    if not info.fingerprint_ok:
+        raise HTTPException(status_code=400, detail="This license was issued for a different machine.")
+    if info.expired:
+        raise HTTPException(status_code=400, detail="This license has expired.")
+    await db_manager.set_license_token(req.token.strip())
+    return {"message": "License activated", "customer": info.customer,
+            "expires_at": info.expires_at, "days_left": info.days_left}
