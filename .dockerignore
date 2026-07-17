@@ -12,6 +12,11 @@ env/
 # Runtime data — never bake config into the image
 config.json
 
+# Licensing: vendor-only signing tools and the private key must never ship
+tools/
+license_priv.pem
+*_priv.pem
+
 # OS / IDE artefacts
 .DS_Store
 .idea/
