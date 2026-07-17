@@ -1,0 +1,63 @@
+# Canonical label set for this repository.
+# This file documents intent; run .github/setup-github.sh to create the labels
+# on GitHub via the gh CLI. Every issue gets one `type:` and one `priority:`.
+# `status:` reflects lifecycle; `area:` scopes to a subsystem.
+
+# --- Type (what kind of work) ---
+- name: "type: bug"
+  color: "d73a4a"
+  description: Something is broken or behaving incorrectly.
+- name: "type: feature"
+  color: "0e8a16"
+  description: New capability or enhancement.
+- name: "type: chore"
+  color: "cfd3d7"
+  description: Refactor, build, deps, or maintenance — no user-facing behavior change.
+- name: "type: docs"
+  color: "0075ca"
+  description: Documentation only.
+
+# --- Priority (how urgent) ---
+- name: "priority: critical"
+  color: "b60205"
+  description: Production down / data loss / security. Drop everything.
+- name: "priority: high"
+  color: "d93f0b"
+  description: Important; schedule for the current cycle.
+- name: "priority: medium"
+  color: "fbca04"
+  description: Normal priority.
+- name: "priority: low"
+  color: "c2e0c6"
+  description: Nice to have; no time pressure.
+
+# --- Status (lifecycle) ---
+- name: "status: triage"
+  color: "ededed"
+  description: Newly filed; needs review and prioritization.
+- name: "status: in-progress"
+  color: "1d76db"
+  description: Actively being worked on.
+- name: "status: blocked"
+  color: "e99695"
+  description: Waiting on a dependency, decision, or external party.
+- name: "status: in-review"
+  color: "5319e7"
+  description: PR open and awaiting review.
+
+# --- Area (which subsystem) ---
+- name: "area: LPR"
+  color: "bfdadc"
+  description: License Plate Recognition monitor.
+- name: "area: FR"
+  color: "bfdadc"
+  description: Face Recognition monitor.
+- name: "area: auth"
+  color: "bfdadc"
+  description: Authentication, users, RBAC.
+- name: "area: infra"
+  color: "bfdadc"
+  description: Deploy, Docker, installer, database.
+- name: "area: ui"
+  color: "bfdadc"
+  description: Web dashboards and static frontend.

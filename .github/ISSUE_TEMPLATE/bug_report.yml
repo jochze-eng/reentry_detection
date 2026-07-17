@@ -1,0 +1,64 @@
+name: "🐛 Bug Report"
+description: Report something that is broken or behaving incorrectly.
+title: "[Bug]: "
+labels: ["type: bug", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. Please fill in the sections below so it can be reproduced and fixed quickly.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One or two sentences describing what is wrong.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the system is affected?
+      options:
+        - LPR (License Plate Recognition)
+        - FR (Face Recognition)
+        - Auth / Users
+        - Config / Settings
+        - Infra / Deploy / Installer
+        - Web UI
+        - Other / Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Exact steps, requests, or configuration that trigger the bug.
+      placeholder: |
+        1. Go to ...
+        2. Configure ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual behavior
+      description: What did you expect to happen, and what actually happened?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / errors
+      description: Relevant log lines, stack traces, or screenshots. (Redact secrets.)
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Deployment (Docker/local), OS, Vaidio AINVR version, browser if UI-related.
+    validations:
+      required: false
