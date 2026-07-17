@@ -1,0 +1,55 @@
+name: "✨ Feature Request"
+description: Propose a new capability or an enhancement to an existing one.
+title: "[Feature]: "
+labels: ["type: feature", "status: triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Describe the problem first, then the proposed solution — this keeps the discussion focused on outcomes.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / motivation
+      description: What need or pain point does this address? Who is affected?
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Which part of the system would this touch?
+      options:
+        - LPR (License Plate Recognition)
+        - FR (Face Recognition)
+        - Auth / Users
+        - Config / Settings
+        - Infra / Deploy / Installer
+        - Web UI
+        - Other / Cross-cutting
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the desired behavior. Sketch API/UI changes if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you weighed and why you rejected them.
+    validations:
+      required: false
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Concrete, checkable conditions that mean this is "done".
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+    validations:
+      required: true
