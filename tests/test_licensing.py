@@ -84,11 +84,17 @@ def main() -> None:
     check("future-dated: not expired", not info.expired)
     check("future-dated: days_left ~ 364", info.days_left is not None and 360 <= info.days_left <= 365)
 
-    # 3. Expired license.
-    past = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
-    info = verify_license(build_token(_payload(fp, past), _signing_key))
-    check("expired license: expired flag set", info.expired)
+    # 3. Expired license — within grace vs beyond grace.
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    info = verify_license(build_token(_payload(fp, recent), _signing_key))
+    check("expired 2d ago: expired flag set", info.expired)
+    check("expired 2d ago: in grace window", info.in_grace)
     check("expired license: signature still valid (no raise)", info.fingerprint_ok)
+
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    info = verify_license(build_token(_payload(fp, old), _signing_key))
+    check("expired 30d ago: expired flag set", info.expired)
+    check("expired 30d ago: past grace window", not info.in_grace)
 
     # 4. License bound to a different machine.
     info = verify_license(build_token(_payload("mid:some-other-box", None), _signing_key))

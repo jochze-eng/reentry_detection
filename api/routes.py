@@ -705,30 +705,43 @@ async def get_license_fingerprint(user: dict = Depends(require_admin)):
         warning = "No hardware machine ID found; binding to a host volume (weaker node-lock)."
     return {"fingerprint": fp, "source": source, "strength_warning": warning}
 
-@router.get("/license/status")
-async def get_license_status(user: dict = Depends(require_admin)):
-    """Report the current license state by verifying the stored token against this host."""
+async def get_license_state() -> dict:
+    """Evaluate the stored license against this host. Shared by the status endpoint
+    and the app-level enforcement gate. `state` is one of ok | grace | locked."""
     token = await db_manager.get_license_token()
     if not token:
-        return {"licensed": False, "reason": "no_license"}
+        return {"state": "locked", "licensed": False, "reason": "no_license"}
     try:
         info = verify_license(token, fingerprint=compute_fingerprint())
     except LicenseError as e:
-        return {"licensed": False, "reason": "invalid", "detail": str(e)}
+        return {"state": "locked", "licensed": False, "reason": "invalid", "detail": str(e)}
+    if not info.fingerprint_ok or (info.expired and not info.in_grace):
+        state = "locked"
+    elif info.expired and info.in_grace:
+        state = "grace"
+    else:
+        state = "ok"
     return {
-        "licensed": info.fingerprint_ok and not info.expired,
+        "state": state,
+        "licensed": state in ("ok", "grace"),
         "customer": info.customer,
         "license_id": info.license_id,
         "issued_at": info.issued_at,
         "expires_at": info.expires_at,
         "days_left": info.days_left,
         "expired": info.expired,
+        "in_grace": info.in_grace,
         "fingerprint_ok": info.fingerprint_ok,
         "limits": info.limits,
     }
 
+@router.get("/license/status")
+async def get_license_status(user: dict = Depends(require_admin)):
+    """Report the current license state by verifying the stored token against this host."""
+    return await get_license_state()
+
 @router.post("/license/activate")
-async def activate_license(req: LicenseActivateRequest, user: dict = Depends(require_admin)):
+async def activate_license(req: LicenseActivateRequest, request: Request, user: dict = Depends(require_admin)):
     """Verify an uploaded license against this machine and store it if valid."""
     try:
         fp = compute_fingerprint()
@@ -743,5 +756,17 @@ async def activate_license(req: LicenseActivateRequest, user: dict = Depends(req
     if info.expired:
         raise HTTPException(status_code=400, detail="This license has expired.")
     await db_manager.set_license_token(req.token.strip())
+
+    # Lift lockdown immediately and start enabled monitors that were held back.
+    state = (await get_license_state())["state"]
+    request.app.state.license_state = state
+    if state != "locked":
+        cfg = await load_config()
+        if cfg:
+            if cfg.job.enabled:
+                asyncio.create_task(lpr_monitor.start(cfg))
+            if cfg.fr.enabled:
+                asyncio.create_task(fr_monitor.start(cfg))
+
     return {"message": "License activated", "customer": info.customer,
             "expires_at": info.expires_at, "days_left": info.days_left}

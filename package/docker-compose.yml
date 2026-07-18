@@ -31,6 +31,8 @@ services:
       # Sync timezone with the host
       - /etc/localtime:/etc/localtime:ro
       - ./logs:/app/logs
+      # Host machine fingerprint for offline licensing (written by install.sh)
+      - ./data:/app/data:ro
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Singapore
@@ -39,6 +41,7 @@ services:
       - DB_USER=rtd_user
       - DB_PASSWORD=rtd_password
       - DB_NAME=recurring_target_detection
+      - RTD_DATA_DIR=/app/data
 
 volumes:
   rtd_db_data:
