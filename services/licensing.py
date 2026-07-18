@@ -30,6 +30,10 @@ SCHEMA_VERSION = 1
 # Days after expiry during which the app keeps running (soft-lock grace window).
 GRACE_DAYS = 7
 
+# If the system clock is ever this many hours behind the last-seen high-water
+# mark, treat it as a rollback attempt to defeat expiry and lock down.
+CLOCK_ROLLBACK_TOLERANCE_HOURS = 1
+
 # Salt mixed into the raw host identifier before hashing. Not a secret (it ships
 # in the image); it only makes the emitted fingerprint opaque and fixed-length.
 FINGERPRINT_SALT = "rtd-license-v1"

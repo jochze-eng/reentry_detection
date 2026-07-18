@@ -282,6 +282,10 @@ class DatabaseManager:
                     activated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
                 )
             """)
+            # Monotonic high-water mark used to detect system-clock rollback.
+            await conn.execute("""
+                ALTER TABLE license ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE
+            """)
 
             logger.info("Database schemas verified/initialized successfully.")
 
@@ -411,6 +415,22 @@ class DatabaseManager:
                 ON CONFLICT (id) DO UPDATE SET token = EXCLUDED.token, activated_at = now()
             """, token)
         logger.info("License token stored.")
+
+    async def get_license_last_seen(self):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT last_seen_at FROM license WHERE id = 1")
+
+    async def touch_license_last_seen(self, ts):
+        """Advance the clock high-water mark. Never moves backward (rollback guard)."""
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE license SET last_seen_at = $1 WHERE id = 1 AND (last_seen_at IS NULL OR $1 > last_seen_at)",
+                ts,
+            )
 
     # ── LPR Log Persistence ──
     async def insert_lpr_log(self, r: ProcessedRecord):

@@ -8,7 +8,7 @@ from services.lpr_monitor import lpr_monitor
 from services.fr_monitor import fr_monitor
 from services.vaidio_client import VaidioClient
 from services.db import db_manager, verify_password, hash_password
-from services.licensing import compute_fingerprint, verify_license, LicenseError
+from services.licensing import compute_fingerprint, verify_license, LicenseError, CLOCK_ROLLBACK_TOLERANCE_HOURS, GRACE_DAYS
 from config import load_config, save_config
 import httpx
 import logging
@@ -715,15 +715,27 @@ async def get_license_state() -> dict:
         info = verify_license(token, fingerprint=compute_fingerprint())
     except LicenseError as e:
         return {"state": "locked", "licensed": False, "reason": "invalid", "detail": str(e)}
+    reason = None
     if not info.fingerprint_ok or (info.expired and not info.in_grace):
         state = "locked"
     elif info.expired and info.in_grace:
         state = "grace"
     else:
         state = "ok"
+
+    # Clock-rollback guard: the system clock must not fall behind the high-water mark.
+    last_seen = await db_manager.get_license_last_seen()
+    if last_seen is not None:
+        if last_seen.tzinfo is None:
+            last_seen = last_seen.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) < last_seen - timedelta(hours=CLOCK_ROLLBACK_TOLERANCE_HOURS):
+            state = "locked"
+            reason = "clock_rollback"
+
     return {
         "state": state,
         "licensed": state in ("ok", "grace"),
+        "reason": reason,
         "customer": info.customer,
         "license_id": info.license_id,
         "issued_at": info.issued_at,
@@ -739,6 +751,15 @@ async def get_license_state() -> dict:
 async def get_license_status(user: dict = Depends(require_admin)):
     """Report the current license state by verifying the stored token against this host."""
     return await get_license_state()
+
+@router.get("/license/notice")
+async def get_license_notice(user: dict = Depends(get_current_user)):
+    """Minimal license state for the cross-page banner (any logged-in user)."""
+    s = await get_license_state()
+    grace_days_left = None
+    if s["state"] == "grace" and s.get("days_left") is not None:
+        grace_days_left = max(0, GRACE_DAYS + s["days_left"])
+    return {"state": s["state"], "grace_days_left": grace_days_left, "expires_at": s.get("expires_at")}
 
 @router.post("/license/activate")
 async def activate_license(req: LicenseActivateRequest, request: Request, user: dict = Depends(require_admin)):
@@ -756,6 +777,7 @@ async def activate_license(req: LicenseActivateRequest, request: Request, user: 
     if info.expired:
         raise HTTPException(status_code=400, detail="This license has expired.")
     await db_manager.set_license_token(req.token.strip())
+    await db_manager.touch_license_last_seen(datetime.now(timezone.utc))
 
     # Lift lockdown immediately and start enabled monitors that were held back.
     state = (await get_license_state())["state"]

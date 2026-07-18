@@ -339,6 +339,48 @@ Persists active user sessions for stateful authorization.
 
 ---
 
+## License Management (Offline, Node-Locked)
+
+The app is gated by an offline, per-machine license. No license server or internet
+is used at any point — verification is pure Ed25519 signature checking.
+
+### Files
+| File | Role |
+|------|------|
+| `services/licensing.py` | Fingerprint computation, offline token verification, grace/expiry logic, constants (`GRACE_DAYS=7`, `CLOCK_ROLLBACK_TOLERANCE_HOURS=1`). Ships the **public** key only. |
+| `tools/gen_keypair.py` | One-time vendor Ed25519 keypair generation. **Excluded from the image.** |
+| `tools/license_sign.py` | Vendor CLI: signs a license bound to a fingerprint. **Excluded from the image.** |
+| `keys/license_pub.pem` | Public verification key baked into the image (vendor generates & commits it). |
+| `static/license.html` | Admin License page: fingerprint display + activation. |
+| `static/license-banner.js` | Cross-page grace-period warning banner. |
+
+### License token
+A single copy-pasteable string: `RTD-LIC.v1.<base64url(payload)>.<base64url(ed25519_sig)>`.
+Payload: `license_id`, `customer`, `fingerprint`, `issued_at`, `expires_at` (null = perpetual), `limits` (extensible, unenforced in v1).
+
+### Machine fingerprint
+`compute_fingerprint()` returns `source:sha256hex`. Source ladder (first usable wins):
+`dmi:` (`/sys/class/dmi/id/product_uuid`) → `mid:` (`/etc/machine-id`, then `/var/lib/dbus/machine-id`) → `vol:` (generated, volume-bound; weaker). The **installer** (`package/install.sh`) reads the host identifier and writes `data/host.fingerprint`; the container reads it via `RTD_DATA_DIR` (mounted read-only) so the non-root `appuser` never touches `/sys`.
+
+### Enforcement (soft-lock)
+`get_license_state()` (in `api/routes.py`) is the single source of truth, returning `state ∈ ok | grace | locked`, used by both `GET /api/license/status` and the app gate. `main.py` holds:
+*   **`license_gate` middleware** — when `locked`, pages 307→`/license` and APIs 403, except an allowlist (`/login`, `/api/login`, `/api/logout`, `/api/change-default-password`, `/api/user/me`, `/license`, `/api/license/*`, `/static/*`).
+*   **Startup gate** — monitors only start when not locked; **activation** flips `app.state.license_state` and starts enabled monitors instantly.
+*   **`license_watch_loop`** (every 5 min) — advances the clock high-water mark, re-evaluates, and stops monitors if state becomes locked.
+*   **Grace** — expired within `GRACE_DAYS` keeps running; `license-banner.js` shows the warning on every page.
+*   **Clock-rollback guard** — `license.last_seen_at` is a monotonic high-water mark (`touch_license_last_seen` only moves it forward); if the system clock falls behind it past tolerance, the state is forced to `locked`.
+
+### API (`api/routes.py`, admin unless noted)
+*   `GET /api/license/fingerprint` — this host's fingerprint (+ strength warning for `vol:`).
+*   `GET /api/license/status` — full state.
+*   `GET /api/license/notice` — minimal state for the banner (**any logged-in user**).
+*   `POST /api/license/activate` — verify against this host, reject wrong-machine/expired, store, unlock.
+
+### Deploy checklist
+`python tools/gen_keypair.py` (once) → build image (bakes `keys/license_pub.pem`) → `install.sh` (auto-captures fingerprint) → admin activates the vendor-signed license → configure & run. **Without a valid license the app stays locked.**
+
+---
+
 ## Key Implementation Notes
 
 - **SSL verification disabled** (`verify=False` in `vaidio_client.py:20`) to support self-signed Vaidio certificates.
