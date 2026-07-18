@@ -15,31 +15,8 @@ from services.fr_monitor import fr_monitor
 from config import load_config
 from services.db import db_manager
 
-# Ensure log directory exists and is writable
-log_dir = "/app/logs"
-writable = False
-if os.path.exists(log_dir):
-    try:
-        # Test writability
-        test_file = os.path.join(log_dir, ".write_test")
-        with open(test_file, "w") as f:
-            f.write("")
-        os.remove(test_file)
-        writable = True
-    except OSError:
-        pass
-else:
-    try:
-        os.makedirs(log_dir, exist_ok=True)
-        writable = True
-    except OSError:
-        pass
-
-if not writable:
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-
-log_file = os.path.join(log_dir, "app.log")
+# Log file target. File logging is best-effort (see the guarded handler below).
+log_file = "/app/logs/app.log"
 
 # Configure root logger
 root_logger = logging.getLogger()
@@ -60,22 +37,30 @@ console_handler.setFormatter(log_formatter)
 console_handler.setLevel(logging.INFO)
 root_logger.addHandler(console_handler)
 
-# Timed Rotating File Handler (7 days rotation)
-file_handler = TimedRotatingFileHandler(
-    log_file,
-    when="D",
-    interval=1,
-    backupCount=7,
-    encoding="utf-8"
-)
-file_handler.setFormatter(log_formatter)
-file_handler.setLevel(logging.INFO)
-root_logger.addHandler(file_handler)
+# Timed Rotating File Handler (7 days rotation) — best-effort.
+# If /app/logs isn't writable (e.g. a bind mount owned by another user, or an
+# existing app.log owned by root), fall back to console-only logging instead of
+# crashing the app at startup. Console output is still captured by `docker logs`.
+# See issue #5.
+try:
+    os.makedirs("/app/logs", exist_ok=True)
+    file_handler = TimedRotatingFileHandler(
+        log_file,
+        when="D",
+        interval=1,
+        backupCount=7,
+        encoding="utf-8"
+    )
+    file_handler.setFormatter(log_formatter)
+    file_handler.setLevel(logging.INFO)
+    root_logger.addHandler(file_handler)
 
-# Ensure uvicorn logs also go to the file
-for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
-    uv_logger = logging.getLogger(logger_name)
-    uv_logger.addHandler(file_handler)
+    # Ensure uvicorn logs also go to the file
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uv_logger = logging.getLogger(logger_name)
+        uv_logger.addHandler(file_handler)
+except OSError as e:
+    root_logger.warning(f"Log file {log_file} not writable ({e}); logging to console only.")
 
 logger = logging.getLogger("app.main")
 
