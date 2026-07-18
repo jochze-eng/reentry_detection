@@ -7,9 +7,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from datetime import datetime, timezone
-from api.routes import router
+from api.routes import router, get_license_state
 from services.lpr_monitor import lpr_monitor
 from services.fr_monitor import fr_monitor
 from config import load_config
@@ -92,17 +92,41 @@ async def image_cache_cleanup_loop():
         await asyncio.sleep(3600)  # Run once every hour
 
 
+async def license_watch_loop(app: FastAPI):
+    """Re-evaluate the license periodically so an expiry (past grace) or a tampered
+    token locks the running app down and stops the monitors."""
+    while True:
+        await asyncio.sleep(300)  # every 5 minutes
+        try:
+            state = (await get_license_state())["state"]
+            if state != app.state.license_state:
+                logging.warning(f"License state changed: {app.state.license_state} -> {state}")
+                app.state.license_state = state
+            if state == "locked":
+                lpr_monitor.stop()
+                fr_monitor.stop()
+        except Exception as e:
+            logging.error(f"Error in license watch loop: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
         await db_manager.connect()
         await db_manager.initialize_schema()
-        
+
         # Start periodic image cache cleanup task
         asyncio.create_task(image_cache_cleanup_loop())
-        
+
+        # Evaluate license before starting any monitors (soft-lock enforcement).
+        app.state.license_state = (await get_license_state())["state"]
+        logging.info(f"License state at startup: {app.state.license_state}")
+        asyncio.create_task(license_watch_loop(app))
+
         cfg = await load_config()
-        if cfg:
+        if app.state.license_state == "locked":
+            logging.warning("License not valid — monitors held until a valid license is activated.")
+        elif cfg:
             if cfg.job.enabled:
                 logging.info("LPR enabled in config, starting LPR monitor...")
                 asyncio.create_task(lpr_monitor.start(cfg))
@@ -127,6 +151,9 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None
 )
+
+# Safe default until the lifespan startup evaluates the real license state.
+app.state.license_state = "locked"
 
 app.add_middleware(
     CORSMiddleware,
@@ -159,6 +186,28 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
+
+# Routes reachable while the app is license-locked, so an admin can always
+# log in and activate a valid license.
+_LICENSE_ALLOWED_PREFIXES = ("/static/", "/api/license/")
+_LICENSE_ALLOWED_EXACT = {
+    "/login", "/license", "/favicon.ico",
+    "/api/login", "/api/logout", "/api/change-default-password", "/api/user/me",
+}
+
+@app.middleware("http")
+async def license_gate(request: Request, call_next):
+    if getattr(app.state, "license_state", "locked") != "locked":
+        return await call_next(request)
+    path = request.url.path
+    if path in _LICENSE_ALLOWED_EXACT or any(path.startswith(p) for p in _LICENSE_ALLOWED_PREFIXES):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse(
+            {"detail": "License required. Activate a valid license to continue."},
+            status_code=403,
+        )
+    return RedirectResponse(url="/license")
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -235,7 +284,10 @@ async def serve_license(request: Request):
     user = await get_session_user(request)
     if not user:
         return RedirectResponse(url="/login")
-    if user["role"] != "Administrator":
+    # While locked, any logged-in user may land here (avoids a redirect loop);
+    # otherwise the license page is admin-only like Settings/Users.
+    locked = getattr(request.app.state, "license_state", "ok") == "locked"
+    if user["role"] != "Administrator" and not locked:
         return RedirectResponse(url="/")
     return FileResponse("static/license.html")
 

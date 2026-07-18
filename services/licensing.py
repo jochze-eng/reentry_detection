@@ -27,6 +27,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 TOKEN_PREFIX = "RTD-LIC.v1."
 SCHEMA_VERSION = 1
 
+# Days after expiry during which the app keeps running (soft-lock grace window).
+GRACE_DAYS = 7
+
 # Salt mixed into the raw host identifier before hashing. Not a secret (it ships
 # in the image); it only makes the emitted fingerprint opaque and fixed-length.
 FINGERPRINT_SALT = "rtd-license-v1"
@@ -73,6 +76,7 @@ class LicenseInfo:
     # Checks (filled by verify_license):
     fingerprint_ok: bool = False
     expired: bool = False
+    in_grace: bool = False
     days_left: Optional[int] = None
 
 
@@ -197,11 +201,14 @@ def verify_license(
 
     expires_at = payload.get("expires_at")
     expired = False
+    in_grace = False
     days_left = None
     if expires_at:
         exp = _parse_dt(expires_at)
         expired = now > exp
         days_left = (exp - now).days
+        # Grace: expired, but within GRACE_DAYS of the expiry date.
+        in_grace = expired and (now - exp).days < GRACE_DAYS
 
     return LicenseInfo(
         license_id=payload["license_id"],
@@ -212,5 +219,6 @@ def verify_license(
         limits=payload.get("limits", {}),
         fingerprint_ok=(payload["fingerprint"] == fingerprint),
         expired=expired,
+        in_grace=in_grace,
         days_left=days_left,
     )

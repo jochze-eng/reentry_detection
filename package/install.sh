@@ -92,6 +92,42 @@ else
 fi
 
 # ---------------------------------------------------------------- #
+# 5b. Capture the host machine fingerprint for offline licensing.
+#     Done here on the host (where /sys and /etc are readable) so the
+#     non-root container never has to read hardware identifiers itself.
+#     Written once and preserved across upgrades to keep the license valid.
+# ---------------------------------------------------------------- #
+mkdir -p "$INSTALL_DIR/data"
+FP_FILE="$INSTALL_DIR/data/host.fingerprint"
+if [[ ! -f "$FP_FILE" ]]; then
+    fp=""
+    # 1. DMI/SMBIOS product UUID (strongest; readable only as root)
+    if [[ -r /sys/class/dmi/id/product_uuid ]]; then
+        v="$(tr -d '[:space:]' < /sys/class/dmi/id/product_uuid | tr 'A-Z' 'a-z')"
+        case "$v" in
+            ""|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff|03000200-0400-0500-0006-000700080009) v="" ;;
+        esac
+        [[ -n "$v" ]] && fp="dmi:$v"
+    fi
+    # 2. systemd / dbus machine-id (world-readable)
+    if [[ -z "$fp" && -r /etc/machine-id ]]; then
+        v="$(tr -d '[:space:]' < /etc/machine-id)"; [[ -n "$v" ]] && fp="mid:$v"
+    fi
+    if [[ -z "$fp" && -r /var/lib/dbus/machine-id ]]; then
+        v="$(tr -d '[:space:]' < /var/lib/dbus/machine-id)"; [[ -n "$v" ]] && fp="mid:$v"
+    fi
+    # 3. Last resort: a generated, volume-bound ID (weaker node-lock)
+    if [[ -z "$fp" ]]; then
+        if command -v uuidgen >/dev/null 2>&1; then v="$(uuidgen)"; else v="$(cat /proc/sys/kernel/random/uuid)"; fi
+        fp="vol:$v"
+        warn "No hardware machine ID available; using a generated volume-bound ID (weaker node-lock)."
+    fi
+    printf '%s\n' "$fp" > "$FP_FILE"
+    chmod 644 "$FP_FILE"
+    log "Machine fingerprint source recorded (${fp%%:*})."
+fi
+
+# ---------------------------------------------------------------- #
 # 6. Start the stack
 # ---------------------------------------------------------------- #
 log "Starting containers..."
