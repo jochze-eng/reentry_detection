@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vaidio RTD - License Management</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <style>
+    .license-grid { display: flex; flex-direction: column; gap: 24px; max-width: 820px; }
+    .card-title { font-size: 16px; font-weight: 700; color: var(--text-primary); margin-bottom: 6px; }
+    .card-desc { font-size: 13px; color: var(--text-secondary); margin-bottom: 18px; }
+    .fp-row { display: flex; gap: 8px; align-items: stretch; }
+    .fp-value {
+      flex: 1; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 14px;
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border-color);
+      border-radius: 10px; padding: 12px 14px; color: var(--text-primary); word-break: break-all;
+    }
+    .license-textarea {
+      width: 100%; min-height: 110px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-color);
+      border-radius: 10px; padding: 12px 14px; color: var(--text-primary); box-sizing: border-box;
+    }
+    .btn-secondary {
+      background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); color: var(--text-primary);
+      padding: 10px 16px; border-radius: 10px; font-size: 13px; font-weight: 500; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s ease;
+    }
+    .btn-secondary:hover { background: rgba(255,255,255,0.08); border-color: rgba(255,255,255,0.15); }
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 999px;
+      font-size: 13px; font-weight: 600;
+    }
+    .status-pill.ok { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.25); }
+    .status-pill.bad { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
+    .status-pill.warn { background: rgba(234,179,8,0.15); color: #fbbf24; border: 1px solid rgba(234,179,8,0.25); }
+    .detail-grid { display: grid; grid-template-columns: 160px 1fr; gap: 10px 16px; margin-top: 18px; font-size: 14px; }
+    .detail-grid .k { color: var(--text-secondary); }
+    .detail-grid .v { color: var(--text-primary); }
+    .warn-text { color: #fbbf24; font-size: 13px; margin-top: 12px; }
+    .actions-row { display: flex; gap: 8px; margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <div class="app-container">
+    <aside class="sidebar">
+      <div class="sidebar-brand">Vaidio <span>RTD</span></div>
+      <nav class="sidebar-menu">
+        <li class="sidebar-item">
+          <a href="/">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+            LPR Monitor
+          </a>
+        </li>
+        <li class="sidebar-item">
+          <a href="/fr">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 21a6 6 0 0 0-12 0"/><circle cx="12" cy="10" r="4"/></svg>
+            FR Monitor
+          </a>
+        </li>
+        <li class="sidebar-item" id="nav-users" style="display: none;">
+          <a href="/users">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            User Management
+          </a>
+        </li>
+        <li class="sidebar-item active" id="nav-license" style="display: none;">
+          <a href="/license">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+            License
+          </a>
+        </li>
+        <li class="sidebar-item" id="nav-settings" style="display: none;">
+          <a href="/settings">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Settings
+          </a>
+        </li>
+        <li class="sidebar-item" style="margin-top: auto;">
+          <a href="#" onclick="logout(event)">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Logout
+          </a>
+        </li>
+      </nav>
+    </aside>
+
+    <main class="main-content">
+      <div class="header-row" style="margin-bottom: 32px;">
+        <h1 class="page-title">License Management</h1>
+        <p class="page-subtitle">Activate this deployment offline and view its machine binding</p>
+      </div>
+
+      <div class="license-grid">
+        <!-- Current status -->
+        <div class="card">
+          <div class="card-title">Current License</div>
+          <div class="card-desc">Status of the license installed on this machine.</div>
+          <div id="status-pill" class="status-pill bad">Loading…</div>
+          <div class="detail-grid" id="status-details" style="display:none;">
+            <div class="k">Customer</div><div class="v" id="d-customer">—</div>
+            <div class="k">Expires</div><div class="v" id="d-expires">—</div>
+            <div class="k">Days left</div><div class="v" id="d-days">—</div>
+            <div class="k">Machine match</div><div class="v" id="d-fp">—</div>
+          </div>
+        </div>
+
+        <!-- Machine fingerprint -->
+        <div class="card">
+          <div class="card-title">Machine Fingerprint</div>
+          <div class="card-desc">Send this to your vendor to have a license issued. It is bound to this host and works with no internet.</div>
+          <div class="fp-row">
+            <div class="fp-value" id="fingerprint">…</div>
+            <button class="btn-secondary" onclick="copyFingerprint()">Copy</button>
+            <button class="btn-secondary" onclick="downloadFingerprint()">Download .req</button>
+          </div>
+          <div class="warn-text" id="fp-warning" style="display:none;"></div>
+        </div>
+
+        <!-- Activate -->
+        <div class="card">
+          <div class="card-title">Activate License</div>
+          <div class="card-desc">Paste the license key you received, or load it from a file, then activate.</div>
+          <textarea class="license-textarea" id="license-input" placeholder="RTD-LIC.v1...."></textarea>
+          <div class="actions-row">
+            <button class="btn-primary" onclick="activate()">Activate</button>
+            <label class="btn-secondary" style="cursor:pointer;">
+              Load from file…
+              <input type="file" id="license-file" accept=".key,.lic,.txt" style="display:none;" onchange="loadFile(event)" />
+            </label>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div id="toast"></div>
+
+  <script>
+    const API = '/api';
+    let currentFingerprint = '';
+
+    window.addEventListener('DOMContentLoaded', () => {
+      checkUser().then(() => {
+        loadFingerprint();
+        loadStatus();
+      });
+    });
+
+    async function checkUser() {
+      try {
+        const user = await get('/user/me');
+        if (user.role === 'Administrator') {
+          document.getElementById('nav-settings').style.display = 'block';
+          document.getElementById('nav-users').style.display = 'block';
+          document.getElementById('nav-license').style.display = 'block';
+        } else {
+          window.location.href = '/';
+        }
+      } catch (err) {
+        window.location.href = '/login';
+      }
+    }
+
+    async function loadFingerprint() {
+      try {
+        const r = await get('/license/fingerprint');
+        currentFingerprint = r.fingerprint;
+        document.getElementById('fingerprint').textContent = r.fingerprint;
+        if (r.strength_warning) {
+          const w = document.getElementById('fp-warning');
+          w.textContent = '⚠ ' + r.strength_warning;
+          w.style.display = 'block';
+        }
+      } catch (err) {
+        document.getElementById('fingerprint').textContent = 'Unavailable: ' + err.message;
+      }
+    }
+
+    async function loadStatus() {
+      const pill = document.getElementById('status-pill');
+      const details = document.getElementById('status-details');
+      try {
+        const s = await get('/license/status');
+        if (s.licensed) {
+          pill.className = 'status-pill ok';
+          pill.textContent = '● Licensed';
+        } else if (s.reason === 'no_license') {
+          pill.className = 'status-pill bad';
+          pill.textContent = '● Not activated';
+          details.style.display = 'none';
+          return;
+        } else if (s.expired) {
+          pill.className = 'status-pill warn';
+          pill.textContent = '● Expired';
+        } else if (s.fingerprint_ok === false) {
+          pill.className = 'status-pill bad';
+          pill.textContent = '● Wrong machine';
+        } else {
+          pill.className = 'status-pill bad';
+          pill.textContent = '● Invalid: ' + (s.detail || s.reason || 'unknown');
+          details.style.display = 'none';
+          return;
+        }
+        document.getElementById('d-customer').textContent = s.customer || '—';
+        document.getElementById('d-expires').textContent = s.expires_at || 'Perpetual';
+        document.getElementById('d-days').textContent = (s.days_left != null) ? s.days_left : '—';
+        document.getElementById('d-fp').textContent = s.fingerprint_ok ? 'Yes' : 'No';
+        details.style.display = 'grid';
+      } catch (err) {
+        pill.className = 'status-pill bad';
+        pill.textContent = '● Error: ' + err.message;
+      }
+    }
+
+    function copyFingerprint() {
+      navigator.clipboard.writeText(currentFingerprint)
+        .then(() => toast('Fingerprint copied'))
+        .catch(() => toast('Copy failed', 'error'));
+    }
+
+    function downloadFingerprint() {
+      const blob = new Blob([currentFingerprint + '\n'], { type: 'text/plain' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'machine.req';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }
+
+    function loadFile(e) {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => { document.getElementById('license-input').value = reader.result.trim(); };
+      reader.readAsText(file);
+    }
+
+    async function activate() {
+      const token = document.getElementById('license-input').value.trim();
+      if (!token) { toast('Paste a license key first', 'error'); return; }
+      try {
+        const r = await post('/license/activate', { token });
+        toast(r.message + ' — ' + (r.customer || ''));
+        loadStatus();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    // ── HTTP helpers ──
+    async function get(path) {
+      const r = await fetch(API + path);
+      if (r.status === 401) { window.location.href = '/login'; return; }
+      if (!r.ok) { const msg = await r.json().catch(() => ({ detail: r.statusText })); throw new Error(msg.detail || r.statusText); }
+      return r.json();
+    }
+
+    async function post(path, body) {
+      const r = await fetch(API + path, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      });
+      if (r.status === 401) { window.location.href = '/login'; return; }
+      if (!r.ok) { const msg = await r.json().catch(() => ({ detail: r.statusText })); throw new Error(msg.detail || r.statusText); }
+      return r.json();
+    }
+
+    async function logout(e) {
+      if (e) e.preventDefault();
+      try { await post('/logout', {}); window.location.href = '/login'; }
+      catch (err) { window.location.href = '/login'; }
+    }
+
+    let _toastTimer;
+    function toast(msg, type = 'success') {
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = msg;
+      el.className = `show ${type}`;
+      clearTimeout(_toastTimer);
+      _toastTimer = setTimeout(() => { el.className = ''; }, 3000);
+    }
+  </script>
+</body>
+</html>

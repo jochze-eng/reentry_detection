@@ -230,6 +230,15 @@ async def serve_users(request: Request):
         return RedirectResponse(url="/")
     return FileResponse("static/users.html")
 
+@app.get("/license")
+async def serve_license(request: Request):
+    user = await get_session_user(request)
+    if not user:
+        return RedirectResponse(url="/login")
+    if user["role"] != "Administrator":
+        return RedirectResponse(url="/")
+    return FileResponse("static/license.html")
+
 @app.get("/login")
 async def serve_login(request: Request):
     user = await get_session_user(request)

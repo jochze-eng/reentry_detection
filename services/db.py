@@ -274,6 +274,15 @@ class DatabaseManager:
                         await conn.execute("UPDATE users SET must_change_password = TRUE WHERE username = $1", u["username"])
                         logger.info(f"Marked existing user '{u['username']}' with default password to change it on first login.")
 
+            # 9. License table (single row, id=1)
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS license (
+                    id INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+                    token TEXT NOT NULL,
+                    activated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+                )
+            """)
+
             logger.info("Database schemas verified/initialized successfully.")
 
     # ── Configuration Persistence ──
@@ -385,6 +394,23 @@ class DatabaseManager:
             fr_exclude_cat_str
             )
             logger.info("Configuration saved to database.")
+
+    # ── License Persistence ──
+    async def get_license_token(self) -> str | None:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval("SELECT token FROM license WHERE id = 1")
+
+    async def set_license_token(self, token: str):
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO license (id, token, activated_at) VALUES (1, $1, now())
+                ON CONFLICT (id) DO UPDATE SET token = EXCLUDED.token, activated_at = now()
+            """, token)
+        logger.info("License token stored.")
 
     # ── LPR Log Persistence ──
     async def insert_lpr_log(self, r: ProcessedRecord):
