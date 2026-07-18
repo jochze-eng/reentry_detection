@@ -98,6 +98,8 @@ async def license_watch_loop(app: FastAPI):
     while True:
         await asyncio.sleep(300)  # every 5 minutes
         try:
+            # Advance the clock high-water mark (only moves forward) before evaluating.
+            await db_manager.touch_license_last_seen(datetime.now(timezone.utc))
             state = (await get_license_state())["state"]
             if state != app.state.license_state:
                 logging.warning(f"License state changed: {app.state.license_state} -> {state}")
