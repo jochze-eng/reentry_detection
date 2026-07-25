@@ -29,4 +29,5 @@ class FRProcessedRecord(BaseModel):
     position: str = "0,0,0,0"   # bounding box "x,y,w,h" from faceKey.position
     confidence: float = 0.0      # match confidence from faceKey.confidence
     descriptor: Optional[str] = None
+    person_cluster_id: Optional[int] = None   # stable per-individual id (Vaidio-search derived)
 

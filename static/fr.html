@@ -88,11 +88,11 @@
             <span class="monitor-name">FR Monitor Status & Logs</span>
           </div>
           <div class="stats-row">
-            <div class="stat-box">
+            <div class="stat-box" id="fr-tile-unique" style="cursor:pointer;outline:2px solid #6366f1;" onclick="setFrLogFilter('all')" title="Show all recent logs">
               <div class="stat-num" id="fr-stat-unique">0</div>
               <div class="stat-label">Unique Face</div>
             </div>
-            <div class="stat-box">
+            <div class="stat-box" id="fr-tile-triggered" style="cursor:pointer;" onclick="setFrLogFilter('triggered')" title="Show only triggered transactions">
               <div class="stat-num" id="fr-stat-triggered">0</div>
               <div class="stat-label">Triggered</div>
             </div>
@@ -300,10 +300,11 @@
     // ── Status refresh ──
     async function refreshStatus() {
       try {
+        const logsUrl = (frLogFilter === 'triggered') ? '/fr/logs?limit=1000&triggered=true' : '/fr/logs?limit=50';
         const [lprStatus, frStatus, frLogs, cameras] = await Promise.all([
           get('/monitor/status'),
           get('/fr/status'),
-          get('/fr/logs?limit=50'),
+          get(logsUrl),
           get('/cameras'),
         ]);
 
@@ -360,7 +361,7 @@
         const triggeredEl = document.getElementById(`fr-stat-triggered`);
         
         if (uniqueEl) uniqueEl.textContent = stats.unique_fr_count ?? 0;
-        if (triggeredEl) triggeredEl.textContent = stats.total_triggered ?? 0;
+        if (triggeredEl) triggeredEl.textContent = stats.triggered_count ?? stats.total_triggered ?? 0;
       }
     }
 
@@ -373,16 +374,31 @@
     let imageNaturalWidth = 1920;
     let imageNaturalHeight = 1080;
 
+    // Recent-logs filter: 'all' (live recent) or 'triggered' (triggered in lookback window, from backend)
+    let frLogFilter = 'all';
+
+    function setFrLogFilter(f) {
+      frLogFilter = f;
+      const uniq = document.getElementById('fr-tile-unique');
+      const trig = document.getElementById('fr-tile-triggered');
+      if (uniq) uniq.style.outline = (f === 'all') ? '2px solid #6366f1' : 'none';
+      if (trig) trig.style.outline = (f === 'triggered') ? '2px solid #6366f1' : 'none';
+      refreshStatus();  // immediately reload the table with the right data set
+    }
+
     function updateFRLogs(logs) {
       // Do not overwrite logs table if the user is in target details view
       if (currentView === 'details') return;
 
+      const view = logs || [];
+
       const tbody = document.getElementById('fr-log-body');
       const countEl = document.getElementById('fr-log-count');
-      if (countEl) countEl.textContent = logs.length ? `${logs.length} entries` : '';
+      if (countEl) countEl.textContent = view.length ? `${view.length} entries` : '';
       if (!tbody) return;
-      if (!logs.length) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-log">No records yet</td></tr>';
+      if (!view.length) {
+        const msg = (frLogFilter === 'triggered') ? 'No triggered transactions found' : 'No records yet';
+        tbody.innerHTML = `<tr><td colspan="6" class="empty-log">${msg}</td></tr>`;
         return;
       }
       const sorted = [...logs].sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
