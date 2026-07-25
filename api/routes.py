@@ -506,6 +506,7 @@ async def get_lpr_status(user: dict = Depends(get_current_user)):
     cfg = await load_config()
     lookback = cfg.job.lookback_hours if cfg else 24
     status["stats"]["unique_lpr_count"] = await db_manager.get_unique_lpr_count(lookback)
+    status["stats"]["triggered_count"] = await db_manager.get_lpr_triggered_count(lookback)
     return status
 
 @router.get("/monitor/chart")
@@ -535,8 +536,12 @@ async def get_lpr_chart(
 
 
 @router.get("/monitor/logs")
-async def get_lpr_logs(limit: int = Query(default=50, ge=1, le=200), user: dict = Depends(get_current_user)):
-    return await db_manager.get_lpr_logs(limit=limit)
+async def get_lpr_logs(limit: int = Query(default=50, ge=1, le=1000), triggered: bool = Query(default=False), user: dict = Depends(get_current_user)):
+    lookback = None
+    if triggered:
+        cfg = await load_config()
+        lookback = cfg.job.lookback_hours if cfg else 24
+    return await db_manager.get_lpr_logs(limit=limit, triggered_only=triggered, lookback_hours=lookback)
 
 @router.get("/monitor/target/history")
 async def get_lpr_target_history(
@@ -566,6 +571,7 @@ async def get_fr_status(user: dict = Depends(get_current_user)):
     cfg = await load_config()
     lookback = cfg.fr.lookback_hours if cfg else 24
     status["stats"]["unique_fr_count"] = await db_manager.get_unique_fr_count(lookback)
+    status["stats"]["triggered_count"] = await db_manager.get_fr_triggered_count(lookback)
     return status
 
 @router.get("/fr/chart")
@@ -595,8 +601,12 @@ async def get_fr_chart(
 
 
 @router.get("/fr/logs")
-async def get_fr_logs(limit: int = Query(default=50, ge=1, le=200), user: dict = Depends(get_current_user)):
-    return await db_manager.get_fr_logs(limit=limit)
+async def get_fr_logs(limit: int = Query(default=50, ge=1, le=1000), triggered: bool = Query(default=False), user: dict = Depends(get_current_user)):
+    lookback = None
+    if triggered:
+        cfg = await load_config()
+        lookback = cfg.fr.lookback_hours if cfg else 24
+    return await db_manager.get_fr_logs(limit=limit, triggered_only=triggered, lookback_hours=lookback)
 
 @router.get("/fr/target/history")
 async def get_fr_target_history(

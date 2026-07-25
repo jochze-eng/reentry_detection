@@ -88,11 +88,11 @@
             <span class="monitor-name">LPR Monitor Status & Logs</span>
           </div>
           <div class="stats-row">
-            <div class="stat-box">
+            <div class="stat-box" id="lpr-tile-unique" style="cursor:pointer;outline:2px solid #6366f1;" onclick="setLprLogFilter('all')" title="Show all recent logs">
               <div class="stat-num" id="lpr-stat-unique">0</div>
               <div class="stat-label">Unique LPR</div>
             </div>
-            <div class="stat-box">
+            <div class="stat-box" id="lpr-tile-triggered" style="cursor:pointer;" onclick="setLprLogFilter('triggered')" title="Show only triggered transactions">
               <div class="stat-num" id="lpr-stat-triggered">0</div>
               <div class="stat-label">Triggered</div>
             </div>
@@ -307,10 +307,11 @@
     // ── Status refresh ──
     async function refreshStatus() {
       try {
+        const logsUrl = (lprLogFilter === 'triggered') ? '/monitor/logs?limit=1000&triggered=true' : '/monitor/logs?limit=50';
         const [lprStatus, frStatus, lprLogs, cameras] = await Promise.all([
           get('/monitor/status'),
           get('/fr/status'),
-          get('/monitor/logs?limit=50'),
+          get(logsUrl),
           get('/cameras'),
         ]);
 
@@ -367,23 +368,38 @@
         const triggeredEl = document.getElementById(`lpr-stat-triggered`);
         
         if (uniqueEl) uniqueEl.textContent = stats.unique_lpr_count ?? 0;
-        if (triggeredEl) triggeredEl.textContent = stats.total_triggered ?? 0;
+        if (triggeredEl) triggeredEl.textContent = stats.triggered_count ?? stats.total_triggered ?? 0;
       }
+    }
+
+    // Recent-logs filter: 'all' (live recent) or 'triggered' (triggered in lookback window, from backend)
+    let lprLogFilter = 'all';
+
+    function setLprLogFilter(f) {
+      lprLogFilter = f;
+      const uniq = document.getElementById('lpr-tile-unique');
+      const trig = document.getElementById('lpr-tile-triggered');
+      if (uniq) uniq.style.outline = (f === 'all') ? '2px solid #6366f1' : 'none';
+      if (trig) trig.style.outline = (f === 'triggered') ? '2px solid #6366f1' : 'none';
+      refreshStatus();  // immediately reload the table with the right data set
     }
 
     function updateLPRLogs(logs) {
       // Do not overwrite logs table if the user is in target details view
       if (currentView === 'details') return;
 
+      const view = logs || [];
+
       const tbody = document.getElementById('lpr-log-body');
       const countEl = document.getElementById('lpr-log-count');
-      if (countEl) countEl.textContent = logs.length ? `${logs.length} entries` : '';
+      if (countEl) countEl.textContent = view.length ? `${view.length} entries` : '';
       if (!tbody) return;
-      if (!logs.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="empty-log">No records yet</td></tr>';
+      if (!view.length) {
+        const msg = (lprLogFilter === 'triggered') ? 'No triggered transactions found' : 'No records yet';
+        tbody.innerHTML = `<tr><td colspan="5" class="empty-log">${msg}</td></tr>`;
         return;
       }
-      const sorted = [...logs].sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
+      const sorted = [...view].sort((a, b) => new Date(b.detected_at) - new Date(a.detected_at));
       tbody.innerHTML = sorted.map(r => {
         const tag = r.error ? '<span class="tag tag-error">error</span>'
                   : r.triggered ? '<span class="tag tag-triggered">triggered</span>'

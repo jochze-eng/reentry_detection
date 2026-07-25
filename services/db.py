@@ -158,8 +158,14 @@ class DatabaseManager:
             await conn.execute("""
                 ALTER TABLE fr_logs ADD COLUMN IF NOT EXISTS descriptor TEXT
             """)
+            # Add person_cluster_id: stable per-individual id derived from Vaidio face-search,
+            # used to count unique strangers (who all share face_target_id='unknown').
+            await conn.execute("""
+                ALTER TABLE fr_logs ADD COLUMN IF NOT EXISTS person_cluster_id BIGINT
+            """)
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_target ON fr_logs (face_target_id)")
             await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_detected ON fr_logs (detected_at DESC)")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_fr_logs_cluster ON fr_logs (person_cluster_id)")
 
             # 3b. FR history cache table
             await conn.execute("""
@@ -459,15 +465,22 @@ class DatabaseManager:
             r.position
             )
 
-    async def get_lpr_logs(self, limit: int = 50) -> list[dict]:
+    async def get_lpr_logs(self, limit: int = 50, triggered_only: bool = False, lookback_hours: int = None) -> list[dict]:
         if not self.pool:
             await self.connect()
 
+        conds = []
+        if triggered_only:
+            conds.append("triggered = TRUE")
+        if lookback_hours is not None:
+            conds.append(f"detected_at >= NOW() - ({int(lookback_hours)} * INTERVAL '1 hour')")
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
+            rows = await conn.fetch(f"""
                 SELECT license_plate_id, characters, confidence, detected_at, camera_id, history_count, triggered, event_created, error_msg as error,
                        COALESCE(file, '') as file, COALESCE(scene_thumbnail, '') as scene_thumbnail, COALESCE(position, '0,0,0,0') as position
                 FROM lpr_logs
+                {where}
                 ORDER BY detected_at DESC
                 LIMIT $1
             """, limit)
@@ -534,6 +547,16 @@ class DatabaseManager:
             """, lookback_hours)
             return row["count"] if row else 0
 
+    async def get_lpr_triggered_count(self, lookback_hours: int) -> int:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT COUNT(*) as count FROM lpr_logs
+                WHERE triggered = TRUE AND detected_at >= NOW() - ($1 * INTERVAL '1 hour')
+            """, lookback_hours)
+            return row["count"] if row else 0
+
     async def get_lpr_chart_data(self, lookback_hours: int, interval_minutes: int) -> list:
         if not self.pool:
             await self.connect()
@@ -569,8 +592,9 @@ class DatabaseManager:
             await conn.execute("""
                 INSERT INTO fr_logs (
                     face_match_id, face_target_id, face_target_name, face_file, detected_at, camera_id,
-                    history_count, triggered, event_created, error_msg, position, confidence, descriptor
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    history_count, triggered, event_created, error_msg, position, confidence, descriptor,
+                    person_cluster_id
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 ON CONFLICT (face_match_id) DO NOTHING
             """,
             r.faceMatchId,
@@ -585,8 +609,26 @@ class DatabaseManager:
             r.error,
             r.position,
             r.confidence,
-            r.descriptor
+            r.descriptor,
+            r.person_cluster_id
             )
+
+    async def assign_fr_cluster(self, own_id: int, matched_ids: list) -> int:
+        """Return a stable person-cluster id for a face given the face_match_ids that
+        Vaidio's search considers the same person. Adopts the earliest existing cluster
+        among those matches; otherwise starts a new cluster keyed by this face's own id."""
+        if not self.pool:
+            await self.connect()
+        ids = [int(m) for m in matched_ids if m is not None and int(m) != int(own_id)]
+        if ids:
+            async with self.pool.acquire() as conn:
+                existing = await conn.fetchval("""
+                    SELECT MIN(person_cluster_id) FROM fr_logs
+                    WHERE face_match_id = ANY($1::bigint[]) AND person_cluster_id IS NOT NULL
+                """, ids)
+            if existing is not None:
+                return int(existing)
+        return int(own_id)
 
     async def get_fr_descriptor_by_file(self, face_file: str) -> str | None:
         if not self.pool:
@@ -676,17 +718,24 @@ class DatabaseManager:
             return records
 
 
-    async def get_fr_logs(self, limit: int = 50) -> list[dict]:
+    async def get_fr_logs(self, limit: int = 50, triggered_only: bool = False, lookback_hours: int = None) -> list[dict]:
         if not self.pool:
             await self.connect()
 
+        conds = []
+        if triggered_only:
+            conds.append("triggered = TRUE")
+        if lookback_hours is not None:
+            conds.append(f"detected_at >= NOW() - ({int(lookback_hours)} * INTERVAL '1 hour')")
+        where = ("WHERE " + " AND ".join(conds)) if conds else ""
         async with self.pool.acquire() as conn:
-            rows = await conn.fetch("""
+            rows = await conn.fetch(f"""
                 SELECT face_match_id, face_target_id, face_target_name, face_file, detected_at, camera_id,
                        history_count, triggered, event_created, error_msg as error,
                        COALESCE(position, '0,0,0,0') as position,
                        COALESCE(confidence, 0.0) as confidence
                 FROM fr_logs
+                {where}
                 ORDER BY detected_at DESC
                 LIMIT $1
             """, limit)
@@ -780,9 +829,22 @@ class DatabaseManager:
 
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("""
-                SELECT COUNT(DISTINCT face_target_id) as count
+                SELECT COUNT(DISTINCT CASE
+                         WHEN face_target_id <> 'unknown' THEN 'T:' || face_target_id
+                         ELSE 'C:' || COALESCE(person_cluster_id::text, 'm' || face_match_id::text)
+                       END) as count
                 FROM fr_logs
                 WHERE detected_at >= NOW() - ($1 * INTERVAL '1 hour')
+            """, lookback_hours)
+            return row["count"] if row else 0
+
+    async def get_fr_triggered_count(self, lookback_hours: int) -> int:
+        if not self.pool:
+            await self.connect()
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow("""
+                SELECT COUNT(*) as count FROM fr_logs
+                WHERE triggered = TRUE AND detected_at >= NOW() - ($1 * INTERVAL '1 hour')
             """, lookback_hours)
             return row["count"] if row else 0
 
@@ -792,9 +854,12 @@ class DatabaseManager:
 
         async with self.pool.acquire() as conn:
             rows = await conn.fetch("""
-                SELECT 
+                SELECT
                     bin_start as time,
-                    COALESCE(COUNT(DISTINCT f.face_target_id), 0)::int as count
+                    COALESCE(COUNT(DISTINCT CASE
+                        WHEN f.face_target_id <> 'unknown' THEN 'T:' || f.face_target_id
+                        ELSE 'C:' || COALESCE(f.person_cluster_id::text, 'm' || f.face_match_id::text)
+                    END), 0)::int as count
                 FROM (
                     SELECT generate_series(
                         NOW() - ($1::int * INTERVAL '1 hour'), 

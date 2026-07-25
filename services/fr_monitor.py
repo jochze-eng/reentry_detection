@@ -194,6 +194,15 @@ class FRMonitor:
             self.stats["total_processed"] += 1
             logger.info(f"[FR:{record.faceTargetName}] history_count={count} threshold={cfg.fr.threshold}")
 
+            # Assign a stable per-person cluster id from Vaidio's own matches (reuses the
+            # search above — no extra Vaidio call). Guarded so it can never break FR logging.
+            cluster_id = record.faceMatchId
+            try:
+                matched_ids = [hr.get("faceMatchId") for hr in history_records]
+                cluster_id = await db_manager.assign_fr_cluster(record.faceMatchId, matched_ids)
+            except Exception as ce:
+                logger.warning(f"[FR:{record.faceTargetName}] cluster assignment failed: {ce}")
+
             triggered = False
             event_created = False
 
@@ -222,6 +231,7 @@ class FRMonitor:
                             position=record.position,
                             confidence=record.confidence,
                             descriptor=descriptor,
+                            person_cluster_id=cluster_id,
                         ), history_records
 
             return FRProcessedRecord(
@@ -255,6 +265,7 @@ class FRMonitor:
                 position=record.position,
                 confidence=record.confidence,
                 descriptor=descriptor,
+                person_cluster_id=record.faceMatchId,
             ), []
 
     # ------------------------------------------------------------------ #
